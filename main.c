@@ -4,6 +4,7 @@
 #include <pwd.h>
 #include <time.h>
 #include <string.h>
+#include <fcntl.h>
 
 
 void get_prompt(char *prompt, size_t size) {
@@ -36,7 +37,17 @@ void get_prompt(char *prompt, size_t size) {
              time_buf, pw->pw_name, hostname);
 }
 
-void execute_command(char **args) {
+void open_file(char *filename) {
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd == -1) {
+        perror("Ошибка открытия файла");
+        exit(1);
+    }
+    dup2(fd, STDOUT_FILENO);
+    close(fd);
+}
+
+void execute_command(char **args, char *filename) {
     if (!args[0] || strlen(args[0]) == 0) return;
 
     if (strcmp(args[0], "quit") == 0) {
@@ -47,6 +58,9 @@ void execute_command(char **args) {
     pid_t pid = fork();
 
     if (pid == 0) {
+        if (filename) {
+            open_file(filename);
+        }
         execvp(args[0], args);
         perror("Execution error");
         exit(1);
@@ -55,6 +69,19 @@ void execute_command(char **args) {
     } else {
         perror("Fork error");
     }
+}
+
+char* read_file(char **cur_char){
+    char *filename = (char *)calloc(20, sizeof(char));
+
+    char *cur_char_filename = filename;
+
+    while (**cur_char != ';' && **cur_char != '\n' && **cur_char != '\0') {
+        *(cur_char_filename++) = **cur_char;
+        (*cur_char)++;
+    }
+
+    return filename;
 }
 
 void handle_command(char *command) {
@@ -76,6 +103,7 @@ void handle_command(char *command) {
     int i = 0;
     int j = 0;
     char *cur_char = command;
+    char *filename = NULL;
 
     while (*cur_char != '\n') {
         if (*cur_char == ' ') {
@@ -94,7 +122,8 @@ void handle_command(char *command) {
             }
 
             args[i] = NULL;
-            execute_command(args);
+            execute_command(args, filename);
+            filename = NULL;
 
             for (int k = 0; k <= i; k++) {
                 free(args[k]);
@@ -106,6 +135,12 @@ void handle_command(char *command) {
             cur_char++;
             continue;
         }
+        if (*cur_char == '>') {
+            cur_char++;
+            filename = read_file(&cur_char);
+            continue;
+        }
+
         args[i][j++] = *(cur_char++);
     }
 
@@ -123,7 +158,9 @@ void handle_command(char *command) {
         return;
     }
 
-    execute_command(args);
+    execute_command(args, filename);
+
+    filename = NULL;
 
     for (int k = 0; k < num_args; k++) {
         free(args[k]);
