@@ -37,17 +37,26 @@ void get_prompt(char *prompt, size_t size) {
              time_buf, pw->pw_name, hostname);
 }
 
-void open_file(char *filename) {
+void output_redirection(char *filename) {
     int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd == -1) {
-        perror("Ошибка открытия файла");
+        perror("Error opening file");
         exit(1);
     }
     dup2(fd, STDOUT_FILENO);
     close(fd);
 }
 
-void execute_command(char **args, char *filename) {
+void input_redirection(char *filename){
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1) {
+        perror("Error opening input file");
+        exit(1);
+    }
+    dup2(fd, STDIN_FILENO);
+    close(fd);
+}
+void execute_command(char **args, char *filename, int input_file_flag, int output_file_flag) {
     if (!args[0] || strlen(args[0]) == 0) return;
 
     if (strcmp(args[0], "quit") == 0) {
@@ -58,8 +67,11 @@ void execute_command(char **args, char *filename) {
     pid_t pid = fork();
 
     if (pid == 0) {
-        if (filename) {
-            open_file(filename);
+        if (filename && output_file_flag) {
+            output_redirection(filename);
+        }
+        if (filename && input_file_flag) {
+            input_redirection(filename);
         }
         execvp(args[0], args);
         perror("Execution error");
@@ -71,7 +83,7 @@ void execute_command(char **args, char *filename) {
     }
 }
 
-char* read_file(char **cur_char){
+char* read_filename(char **cur_char){
     char *filename = (char *)calloc(20, sizeof(char));
 
     char *cur_char_filename = filename;
@@ -84,9 +96,19 @@ char* read_file(char **cur_char){
     return filename;
 }
 
+void free_args(char ***args, int num_args) {
+    for (int k = 0; k < num_args; k++) {
+        free((*args)[k]);
+    }
+    free((*args));
+    *args = NULL;
+}
+
 void handle_command(char *command) {
     int num_args = 64;
     char **args = (char **)calloc(num_args, sizeof(char *));
+    int input_file_flag = 0;
+    int output_file_flag = 0;
     if (!args) {
         printf("Memory allocation failed for args!\n");
         exit(1);
@@ -122,7 +144,7 @@ void handle_command(char *command) {
             }
 
             args[i] = NULL;
-            execute_command(args, filename);
+            execute_command(args, filename, input_file_flag, output_file_flag);
             filename = NULL;
 
             for (int k = 0; k <= i; k++) {
@@ -132,12 +154,21 @@ void handle_command(char *command) {
 
             i = 0;
             j = 0;
+            input_file_flag = 0;
+            output_file_flag = 0;
             cur_char++;
             continue;
         }
         if (*cur_char == '>') {
             cur_char++;
-            filename = read_file(&cur_char);
+            filename = read_filename(&cur_char);
+            output_file_flag = 1;
+            continue;
+        }
+        if (*cur_char == '<') {
+            cur_char++;
+            filename = read_filename(&cur_char);
+            input_file_flag = 1;
             continue;
         }
 
@@ -151,21 +182,15 @@ void handle_command(char *command) {
     args[i] = NULL;
 
     if (i == 0 || args[0] == NULL) {
-        for (int k = 0; k < num_args; k++) {
-            free(args[k]);
-        }
-        free(args);
+        free_args(&args, num_args);
         return;
     }
 
-    execute_command(args, filename);
+    execute_command(args, filename, input_file_flag, output_file_flag);
 
     filename = NULL;
 
-    for (int k = 0; k < num_args; k++) {
-        free(args[k]);
-    }
-    free(args);
+    free_args(&args, num_args);
 }
 
 
