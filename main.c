@@ -7,6 +7,73 @@
 #include <fcntl.h>
 
 
+typedef struct {
+    int there_are_saved_variables;
+    int i;
+    int j;
+    int l;
+    char ***args;
+    int *input_file_flags;
+    int *output_file_flags;
+    char **filenames;
+} saved_state;
+
+saved_state savedState;
+
+void save_state(saved_state *saved, int i, int j, int l,
+                char ***args, char **filenames,
+                int *input_file_flags, int *output_file_flags,
+                int num_commands, int num_args_per_command)
+{
+    saved->i = i;
+    saved->j = j;
+    saved->l = l;
+    saved->there_are_saved_variables = 1;
+
+    saved->args = (char ***)malloc(num_commands * sizeof(char **));
+    saved->filenames = (char **)malloc(num_commands * sizeof(char *));
+    saved->input_file_flags = (int *)malloc(num_commands * sizeof(int));
+    saved->output_file_flags = (int *)malloc(num_commands * sizeof(int));
+
+    if (!saved->args || !saved->filenames || !saved->input_file_flags || !saved->output_file_flags) {
+        perror("Memory allocation failed");
+        exit(1);
+    }
+
+    for (int c = 0; c < num_commands; c++) {
+        saved->args[c] = (char **)malloc(num_args_per_command * sizeof(char *));
+        if (!saved->args[c]) {
+            perror("Memory allocation failed");
+            exit(1);
+        }
+        memcpy(saved->args[c], args[c], num_args_per_command * sizeof(char *));
+        saved->filenames[c] = filenames[c] ? strdup(filenames[c]) : NULL;
+    }
+
+    memcpy(saved->input_file_flags, input_file_flags, num_commands * sizeof(int));
+    memcpy(saved->output_file_flags, output_file_flags, num_commands * sizeof(int));
+}
+
+void restore_state(saved_state *saved, int *i, int *j, int *l,
+                   char ****args, char ***filenames,
+                   int **input_file_flags, int **output_file_flags)
+{
+    if (!saved->there_are_saved_variables) return;
+
+    *i = saved->i;
+    *j = saved->j;
+    *l = saved->l;
+
+    *args = saved->args;
+    *filenames = saved->filenames;
+    *input_file_flags = saved->input_file_flags;
+    *output_file_flags = saved->output_file_flags;
+
+    saved->there_are_saved_variables = 0;
+}
+
+
+
 void get_prompt(char *prompt, size_t size) {
     // Get the username of the current user
     struct passwd *pw = getpwuid(getuid());
@@ -29,6 +96,11 @@ void get_prompt(char *prompt, size_t size) {
     // Format the time as HH:MM and store it in time_buf
     strftime(time_buf, sizeof(time_buf), "%H:%M", tm_info);
 
+    //
+    if (savedState.there_are_saved_variables == 1) {
+        snprintf(prompt, size, "\033[33m>\033[0m ");
+        return;
+    }
     // Format the prompt string: "HH:MM username@hostname#"
     snprintf(prompt, size,
              "\033[33m%s\033[0m "
@@ -70,7 +142,29 @@ void input_redirection(char *filename){
     close(fd);
 }
 
-void execute_pipeline(char ***args, char **filename, int row_number, int *input_file_flags, int *output_file_flags) {
+
+void execute_pipeline(char ***args, char **filenames, int row_number, int *input_file_flags, int *output_file_flags) {
+
+    // Handle exit command
+    if (strcmp(args[0][0], "exit") == 0) {
+        printf("Exiting shell.\n");
+        exit(0);
+    }
+
+    // Handle cd command
+    if (strcmp(args[0][0], "cd") == 0) {
+        if (args[1] == NULL) {
+            fprintf(stderr, "cd: missing argument\n");
+        } else {
+            if (chdir(args[0][1]) != 0) {
+                perror("cd error");
+            }
+        }
+        return;
+    }
+
+
+
     int pipes[row_number][2];
     pid_t pids[row_number + 1];
 
@@ -87,22 +181,22 @@ void execute_pipeline(char ***args, char **filename, int row_number, int *input_
         pids[i] = fork();
         if (pids[i] == 0){
             if (i == 0) {  // The first process (cmd1)
-                if (input_file_flags[i]) input_redirection(filename[i]);
+                if (input_file_flags[i]) input_redirection(filenames[i]);
                 if (output_file_flags[i]) {
                     close(pipes[i][0]); // Doesn't read from pipe
                     close(pipes[i][1]); // Doesn't write in pipe
-                    output_redirection(filename[i]);
+                    output_redirection(filenames[i]);
                 }
                 else {
                     dup2(pipes[i][1], STDOUT_FILENO); // write in the first pipe
                     close(pipes[i][0]); // Doesn't read from pipe
                 }
             } else if (i == row_number) {  // Last process (cmdN)
-                if (output_file_flags[i]) output_redirection(filename[i]);
+                if (output_file_flags[i]) output_redirection(filenames[i]);
                 if (input_file_flags[i]) {
                     close(pipes[i - 1][0]); // Doesn't read from pipe
                     close(pipes[i - 1][1]); // Doesn't write in pipe
-                    input_redirection(filename[i]);
+                    input_redirection(filenames[i]);
                 }
                 else {
                     dup2(pipes[i - 1][0], STDIN_FILENO); // read from previous pipe
@@ -111,13 +205,13 @@ void execute_pipeline(char ***args, char **filename, int row_number, int *input_
             } else {  // Middle processes (cmd2, cmd3, ..., cmdN-1)
                 if (input_file_flags[i]) {
                     close(pipes[i - 1][0]); // Doesn't read from pipe
-                    input_redirection(filename[i]);
+                    input_redirection(filenames[i]);
                 } else
                     dup2(pipes[i - 1][0], STDIN_FILENO); // read from previous pipe
 
                 if (output_file_flags[i]) {
                     close(pipes[i][1]); // Doesn't write in pipe
-                    output_redirection(filename[i]);
+                    output_redirection(filenames[i]);
                 } else
                     dup2(pipes[i][1], STDOUT_FILENO); // write in the first pipe
 
@@ -159,6 +253,10 @@ char* read_filename(char **cur_char){
     char *cur_char_filename = filename;
 
     while (**cur_char != ';' && **cur_char != '\n' && **cur_char != '\0') {
+        if (**cur_char == ' ') {
+            (*cur_char)++;
+            continue;
+        }
         *(cur_char_filename++) = **cur_char;
         (*cur_char)++;
     }
@@ -215,7 +313,12 @@ void handle_command(char *command) {
     int j = 0;
     int l = 0;
     char *cur_char = command;
-    char **filename = (char **)calloc(max_arg_length, sizeof(char *));
+    char **filenames = (char **)calloc(max_arg_length, sizeof(char *));
+
+    if (savedState.there_are_saved_variables == 1) {
+        restore_state(&savedState, &i, &j, &l, &args, &filenames, &input_file_flags, &output_file_flags);
+    }
+
 
     // Loop through the command string to parse arguments
     while (*cur_char != '\n') {
@@ -230,13 +333,13 @@ void handle_command(char *command) {
         }
         if (*cur_char == '>') {  // Handle output redirection
             cur_char++;
-            filename[i] = read_filename(&cur_char);
+            filenames[i] = read_filename(&cur_char);
             output_file_flags[i] = 1;
             continue;
         }
         if (*cur_char == '<') {  // Handle input redirection
             cur_char++;
-            filename[i] = read_filename(&cur_char);
+            filenames[i] = read_filename(&cur_char);
             input_file_flags[i] = 1;
             continue;
         }
@@ -246,11 +349,8 @@ void handle_command(char *command) {
                 j++;
             }
             args[i][j] = NULL;
-            printf("%d, %d, %d \n", i, j, l);
-            for (int coll = 0; coll <= j; coll++) {
-                printf("%s \n", args[i][coll]);
-            }
-            execute_pipeline(args, filename, i, input_file_flags, output_file_flags);
+
+            execute_pipeline(args, filenames, i, input_file_flags, output_file_flags);
 
             // Reset argument storage for next command
             for (int row = 0; row <= i; row++) {
@@ -267,10 +367,10 @@ void handle_command(char *command) {
             free(output_file_flags);
             output_file_flags = (int *)calloc(20, sizeof(int));
             for (int row = 0; row <= i; row++) {
-                free(filename[i]);
+                free(filenames[i]);
             }
-            free(filename);
-            filename = (char **)calloc(max_arg_length, sizeof(char *));
+            free(filenames);
+            filenames = (char **)calloc(max_arg_length, sizeof(char *));
             cur_char++;
             continue;
         }
@@ -287,8 +387,22 @@ void handle_command(char *command) {
             continue;
         }
 
+        if (*cur_char == '\\') {
+            // If the next character is a newline, we skip it
+            if (*(cur_char + 1) == '\n') {
+                cur_char++;
+                continue;
+            }
+        }
+
         // Store the command argument character by character
         args[i][j][l++] = *(cur_char++);
+    }
+
+    // If the previous character is '\', then save state
+    if (*(cur_char - 1) == '\\') {
+        save_state(&savedState, i, j, l, args, filenames, input_file_flags, output_file_flags, num_commands, num_args_per_command);
+        return;
     }
 
     if (l > 0) {
@@ -304,7 +418,7 @@ void handle_command(char *command) {
     }
 
     // Execute the parsed pipeline
-    execute_pipeline(args, filename, i, input_file_flags, output_file_flags);
+    execute_pipeline(args, filenames, i, input_file_flags, output_file_flags);
 
     // Free allocated memory
     free_args(&args, num_commands, num_args_per_command);
