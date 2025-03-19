@@ -33,60 +33,48 @@ void get_prompt(char *prompt, size_t size) {
     snprintf(prompt, size,
              "\033[33m%s\033[0m "
              "\033[32m%s\033[0m@"
-             "\033[34m%s\033[0m#",
+             "\033[34m%s\033[0m# ",
              time_buf, pw->pw_name, hostname);
 }
 
 void output_redirection(char *filename) {
+    // Open (or create) a file for writing
+    // O_WRONLY  - open for writing only
+    // O_CREAT   - create the file if it does not exist
+    // O_TRUNC   - truncate the file if it already exists
+    // 0644      - file permissions: owner can read/write, others can only read
     int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd == -1) {
         perror("Error opening file");
         exit(1);
     }
+    // Redirect standard output (stdout) to the file
+    // Now, everything written to stdout will be saved in the file
     dup2(fd, STDOUT_FILENO);
+    // Close the file descriptor as it is no longer needed
     close(fd);
 }
 
 void input_redirection(char *filename){
+    // Open the file for reading
+    // O_RDONLY - open for read-only access
     int fd = open(filename, O_RDONLY);
     if (fd == -1) {
         perror("Error opening input file");
         exit(1);
     }
+    // Redirect standard input (stdin) to read from the file
+    // Now, everything that would be read from stdin will come from the file
     dup2(fd, STDIN_FILENO);
+    // Close the file descriptor as it is no longer needed
     close(fd);
 }
-void execute_command(char **args, char *filename, int input_file_flag, int output_file_flag) {
-    if (!args[0] || strlen(args[0]) == 0) return;
 
-    if (strcmp(args[0], "quit") == 0) {
-        printf("Exiting shell.\n");
-        exit(0);
-    }
-
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        if (filename && output_file_flag) {
-            output_redirection(filename);
-        }
-        if (filename && input_file_flag) {
-            input_redirection(filename);
-        }
-        execvp(args[0], args);
-        perror("Execution error");
-        exit(1);
-    } else if (pid > 0) {
-        waitpid(pid, NULL, 0);
-    } else {
-        perror("Fork error");
-    }
-}
-// ls -la | grep ".c"
 void execute_pipeline(char ***args, char **filename, int row_number, int *input_file_flags, int *output_file_flags) {
-    int pipes[row_number + 1][2];
+    int pipes[row_number][2];
     pid_t pids[row_number + 1];
 
+    // Create pipes
     for (int i = 0; i < row_number; i++) {
         if (pipe(pipes[i]) == -1) {
             perror("Pipe error");
@@ -137,11 +125,13 @@ void execute_pipeline(char ***args, char **filename, int row_number, int *input_
                 close(pipes[i][0]); // close unnecessary pipe
             }
 
+            // Close all pipes in child process
             for (int j = 0; j < row_number; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
 
+            // Replace the current process with the desired command
             execvp(args[i][0], args[i]);
             perror("Execution error");
             exit(1);
@@ -150,11 +140,13 @@ void execute_pipeline(char ***args, char **filename, int row_number, int *input_
             exit(1);
         }
     }
+
+    // Close all pipes to avoid leaks
     for (int i = 0; i < row_number; i++) {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
-
+    // The parent is waiting for the completion of all processes
     for (int i = 0; i <= row_number; i++) {
         waitpid(pids[i], NULL, 0);
     }
@@ -174,6 +166,7 @@ char* read_filename(char **cur_char){
     return filename;
 }
 
+
 void free_args(char ****args, int num_commands, int num_args_per_command) {
     for (int row = 0; row < num_commands; row++) {
         for (int call = 0; call < num_args_per_command; call++) {
@@ -190,15 +183,18 @@ void handle_command(char *command) {
     int num_args_per_command = 5;
     int max_arg_length = 20;
 
+    // Allocate memory for input and output redirection flags
     int *input_file_flags = (int *)calloc(num_commands, sizeof(int));
     int *output_file_flags = (int *)calloc(num_commands, sizeof(int));
 
+    // Allocate memory for storing command arguments
     char ***args = (char ***)calloc(num_commands, sizeof(char **));
     if (!args) {
         perror("Memory allocation failed");
         exit(1);
     }
 
+    // Allocate memory for each command and its arguments
     for (int i = 0; i < num_commands; i++) {
         args[i] = (char **)calloc(num_args_per_command, sizeof(char *));
         if (!args[i]) {
@@ -218,10 +214,10 @@ void handle_command(char *command) {
     int i = 0;
     int j = 0;
     int l = 0;
-    // i = j, j = l
     char *cur_char = command;
     char **filename = (char **)calloc(max_arg_length, sizeof(char *));
 
+    // Loop through the command string to parse arguments
     while (*cur_char != '\n') {
         if (*cur_char == ' ') {
             if (l > 0) {
@@ -232,19 +228,19 @@ void handle_command(char *command) {
             cur_char++;
             continue;
         }
-        if (*cur_char == '>') {
+        if (*cur_char == '>') {  // Handle output redirection
             cur_char++;
             filename[i] = read_filename(&cur_char);
             output_file_flags[i] = 1;
             continue;
         }
-        if (*cur_char == '<') {
+        if (*cur_char == '<') {  // Handle input redirection
             cur_char++;
             filename[i] = read_filename(&cur_char);
             input_file_flags[i] = 1;
             continue;
         }
-        if (*cur_char == ';') {
+        if (*cur_char == ';') {  // Handle command separator (;)
             if (l > 0) {
                 args[i][j][l] = '\0';
                 j++;
@@ -256,6 +252,7 @@ void handle_command(char *command) {
             }
             execute_pipeline(args, filename, i, input_file_flags, output_file_flags);
 
+            // Reset argument storage for next command
             for (int row = 0; row <= i; row++) {
                 for (int coll = 0; coll <= j; coll++) {
                     free(args[row][coll]);
@@ -277,7 +274,7 @@ void handle_command(char *command) {
             cur_char++;
             continue;
         }
-        if (*cur_char == '|') {
+        if (*cur_char == '|') {  // Handle piping (|) between commands
             if (l > 0) {
                 args[i][j][l] = '\0';
                 j++;
@@ -290,6 +287,7 @@ void handle_command(char *command) {
             continue;
         }
 
+        // Store the command argument character by character
         args[i][j][l++] = *(cur_char++);
     }
 
@@ -299,24 +297,21 @@ void handle_command(char *command) {
     }
     args[i][j] = NULL;
 
-    printf("%d, %d, %d \n", i, j, l);
-    for (int row = 0; row <= i; row++) {
-        for (int coll = 0; coll < num_args_per_command; coll++) {
-            printf("%s ", args[row][coll]);
-        }
-        printf("\n");
-    }
-
-
+    // If no valid command, free memory and return
     if (j == 0 || args[0][0] == NULL) {
         free_args(&args, num_commands, num_args_per_command);
         return;
     }
 
+    // Execute the parsed pipeline
     execute_pipeline(args, filename, i, input_file_flags, output_file_flags);
 
+    // Free allocated memory
     free_args(&args, num_commands, num_args_per_command);
+    free(input_file_flags);
+    free(output_file_flags);
 }
+
 
 
 
@@ -346,8 +341,6 @@ int main(int argc, char *argv[]) {
                 return 1;
         }
     }
-
-
 
     char prompt[256];
     char command[1024];
