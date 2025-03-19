@@ -82,6 +82,84 @@ void execute_command(char **args, char *filename, int input_file_flag, int outpu
         perror("Fork error");
     }
 }
+// ls -la | grep ".c"
+void execute_pipeline(char ***args, char **filename, int row_number, int *input_file_flags, int *output_file_flags) {
+    int pipes[row_number + 1][2];
+    pid_t pids[row_number + 1];
+
+    for (int i = 0; i < row_number; i++) {
+        if (pipe(pipes[i]) == -1) {
+            perror("Pipe error");
+            exit(1);
+        }
+    }
+
+
+    for (int i = 0; i <= row_number; i++) {
+        pids[i] = fork();
+        if (pids[i] == 0){
+            if (i == 0) {  // The first process (cmd1)
+                if (input_file_flags[i]) input_redirection(filename[i]);
+                if (output_file_flags[i]) {
+                    close(pipes[i][0]); // Doesn't read from pipe
+                    close(pipes[i][1]); // Doesn't write in pipe
+                    output_redirection(filename[i]);
+                }
+                else {
+                    dup2(pipes[i][1], STDOUT_FILENO); // write in the first pipe
+                    close(pipes[i][0]); // Doesn't read from pipe
+                }
+            } else if (i == row_number) {  // Last process (cmdN)
+                if (output_file_flags[i]) output_redirection(filename[i]);
+                if (input_file_flags[i]) {
+                    close(pipes[i - 1][0]); // Doesn't read from pipe
+                    close(pipes[i - 1][1]); // Doesn't write in pipe
+                    input_redirection(filename[i]);
+                }
+                else {
+                    dup2(pipes[i - 1][0], STDIN_FILENO); // read from previous pipe
+                    close(pipes[i - 1][1]); // Doesn't write
+                }
+            } else {  // Middle processes (cmd2, cmd3, ..., cmdN-1)
+                if (input_file_flags[i]) {
+                    close(pipes[i - 1][0]); // Doesn't read from pipe
+                    input_redirection(filename[i]);
+                } else
+                    dup2(pipes[i - 1][0], STDIN_FILENO); // read from previous pipe
+
+                if (output_file_flags[i]) {
+                    close(pipes[i][1]); // Doesn't write in pipe
+                    output_redirection(filename[i]);
+                } else
+                    dup2(pipes[i][1], STDOUT_FILENO); // write in the first pipe
+
+                close(pipes[i - 1][1]); // close unnecessary pipe
+                close(pipes[i][0]); // close unnecessary pipe
+            }
+
+            for (int j = 0; j < row_number; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+
+            execvp(args[i][0], args[i]);
+            perror("Execution error");
+            exit(1);
+        } else if (pids[i] < 0) {
+            perror("Fork error");
+            exit(1);
+        }
+    }
+    for (int i = 0; i < row_number; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+
+    for (int i = 0; i <= row_number; i++) {
+        waitpid(pids[i], NULL, 0);
+    }
+
+}
 
 char* read_filename(char **cur_char){
     char *filename = (char *)calloc(20, sizeof(char));
@@ -96,101 +174,148 @@ char* read_filename(char **cur_char){
     return filename;
 }
 
-void free_args(char ***args, int num_args) {
-    for (int k = 0; k < num_args; k++) {
-        free((*args)[k]);
+void free_args(char ****args, int num_commands, int num_args_per_command) {
+    for (int row = 0; row < num_commands; row++) {
+        for (int call = 0; call < num_args_per_command; call++) {
+            free((*args)[row][call]);
+        }
+        free((*args)[row]);
     }
     free((*args));
     *args = NULL;
 }
 
 void handle_command(char *command) {
-    int num_args = 64;
-    char **args = (char **)calloc(num_args, sizeof(char *));
-    int input_file_flag = 0;
-    int output_file_flag = 0;
+    int num_commands = 10;
+    int num_args_per_command = 5;
+    int max_arg_length = 20;
+
+    int *input_file_flags = (int *)calloc(num_commands, sizeof(int));
+    int *output_file_flags = (int *)calloc(num_commands, sizeof(int));
+
+    char ***args = (char ***)calloc(num_commands, sizeof(char **));
     if (!args) {
-        printf("Memory allocation failed for args!\n");
+        perror("Memory allocation failed");
         exit(1);
     }
 
-    for (int k = 0; k < num_args; k++) {
-        args[k] = (char *)calloc(10, sizeof(char));
-        if (!args[k]) {
-            printf("Memory allocation failed for args[%d]!\n", k);
+    for (int i = 0; i < num_commands; i++) {
+        args[i] = (char **)calloc(num_args_per_command, sizeof(char *));
+        if (!args[i]) {
+            perror("Memory allocation failed");
             exit(1);
+        }
+
+        for (int j = 0; j < num_args_per_command; j++) {
+            args[i][j] = (char *)calloc(max_arg_length, sizeof(char));
+            if (!args[i][j]) {
+                perror("Memory allocation failed");
+                exit(1);
+            }
         }
     }
 
     int i = 0;
     int j = 0;
+    int l = 0;
+    // i = j, j = l
     char *cur_char = command;
-    char *filename = NULL;
+    char **filename = (char **)calloc(max_arg_length, sizeof(char *));
 
     while (*cur_char != '\n') {
         if (*cur_char == ' ') {
-            if (j > 0) {
-                args[i][j] = '\0';
-                i++;
-                j = 0;
+            if (l > 0) {
+                args[i][j][l] = '\0';
+                j++;
+                l = 0;
             }
-            cur_char++;
-            continue;
-        }
-        if (*cur_char == ';') {
-            if (j > 0) {
-                args[i][j] = '\0';
-                i++;
-            }
-
-            args[i] = NULL;
-            execute_command(args, filename, input_file_flag, output_file_flag);
-            filename = NULL;
-
-            for (int k = 0; k <= i; k++) {
-                free(args[k]);
-                args[k] = (char *)calloc(10, sizeof(char));
-            }
-
-            i = 0;
-            j = 0;
-            input_file_flag = 0;
-            output_file_flag = 0;
             cur_char++;
             continue;
         }
         if (*cur_char == '>') {
             cur_char++;
-            filename = read_filename(&cur_char);
-            output_file_flag = 1;
+            filename[i] = read_filename(&cur_char);
+            output_file_flags[i] = 1;
             continue;
         }
         if (*cur_char == '<') {
             cur_char++;
-            filename = read_filename(&cur_char);
-            input_file_flag = 1;
+            filename[i] = read_filename(&cur_char);
+            input_file_flags[i] = 1;
+            continue;
+        }
+        if (*cur_char == ';') {
+            if (l > 0) {
+                args[i][j][l] = '\0';
+                j++;
+            }
+            args[i][j] = NULL;
+            printf("%d, %d, %d \n", i, j, l);
+            for (int coll = 0; coll <= j; coll++) {
+                printf("%s \n", args[i][coll]);
+            }
+            execute_pipeline(args, filename, i, input_file_flags, output_file_flags);
+
+            for (int row = 0; row <= i; row++) {
+                for (int coll = 0; coll <= j; coll++) {
+                    free(args[row][coll]);
+                    args[row][coll] = (char *)calloc(20, sizeof(char));
+                }
+            }
+            i = 0;
+            j = 0;
+            l = 0;
+            free(input_file_flags);
+            input_file_flags = (int *)calloc(20, sizeof(int));
+            free(output_file_flags);
+            output_file_flags = (int *)calloc(20, sizeof(int));
+            for (int row = 0; row <= i; row++) {
+                free(filename[i]);
+            }
+            free(filename);
+            filename = (char **)calloc(max_arg_length, sizeof(char *));
+            cur_char++;
+            continue;
+        }
+        if (*cur_char == '|') {
+            if (l > 0) {
+                args[i][j][l] = '\0';
+                j++;
+            }
+            args[i][j] = NULL;
+            i++;
+            j = 0;
+            l = 0;
+            cur_char++;
             continue;
         }
 
-        args[i][j++] = *(cur_char++);
+        args[i][j][l++] = *(cur_char++);
     }
 
-    if (j > 0) {
-        args[i][j] = '\0';
-        i++;
+    if (l > 0) {
+        args[i][j][l] = '\0';
+        j++;
     }
-    args[i] = NULL;
+    args[i][j] = NULL;
 
-    if (i == 0 || args[0] == NULL) {
-        free_args(&args, num_args);
+    printf("%d, %d, %d \n", i, j, l);
+    for (int row = 0; row <= i; row++) {
+        for (int coll = 0; coll < num_args_per_command; coll++) {
+            printf("%s ", args[row][coll]);
+        }
+        printf("\n");
+    }
+
+
+    if (j == 0 || args[0][0] == NULL) {
+        free_args(&args, num_commands, num_args_per_command);
         return;
     }
 
-    execute_command(args, filename, input_file_flag, output_file_flag);
+    execute_pipeline(args, filename, i, input_file_flags, output_file_flags);
 
-    filename = NULL;
-
-    free_args(&args, num_args);
+    free_args(&args, num_commands, num_args_per_command);
 }
 
 
