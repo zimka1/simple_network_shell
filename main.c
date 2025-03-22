@@ -5,73 +5,9 @@
 #include <time.h>
 #include <string.h>
 #include <fcntl.h>
-
-
-typedef struct {
-    int there_are_saved_variables;
-    int i;
-    int j;
-    int l;
-    char ***args;
-    int *input_file_flags;
-    int *output_file_flags;
-    char **filenames;
-} saved_state;
-
-saved_state savedState;
-
-void save_state(saved_state *saved, int i, int j, int l,
-                char ***args, char **filenames,
-                int *input_file_flags, int *output_file_flags,
-                int num_commands, int num_args_per_command)
-{
-    saved->i = i;
-    saved->j = j;
-    saved->l = l;
-    saved->there_are_saved_variables = 1;
-
-    saved->args = (char ***)malloc(num_commands * sizeof(char **));
-    saved->filenames = (char **)malloc(num_commands * sizeof(char *));
-    saved->input_file_flags = (int *)malloc(num_commands * sizeof(int));
-    saved->output_file_flags = (int *)malloc(num_commands * sizeof(int));
-
-    if (!saved->args || !saved->filenames || !saved->input_file_flags || !saved->output_file_flags) {
-        perror("Memory allocation failed");
-        exit(1);
-    }
-
-    for (int c = 0; c < num_commands; c++) {
-        saved->args[c] = (char **)malloc(num_args_per_command * sizeof(char *));
-        if (!saved->args[c]) {
-            perror("Memory allocation failed");
-            exit(1);
-        }
-        memcpy(saved->args[c], args[c], num_args_per_command * sizeof(char *));
-        saved->filenames[c] = filenames[c] ? strdup(filenames[c]) : NULL;
-    }
-
-    memcpy(saved->input_file_flags, input_file_flags, num_commands * sizeof(int));
-    memcpy(saved->output_file_flags, output_file_flags, num_commands * sizeof(int));
-}
-
-void restore_state(saved_state *saved, int *i, int *j, int *l,
-                   char ****args, char ***filenames,
-                   int **input_file_flags, int **output_file_flags)
-{
-    if (!saved->there_are_saved_variables) return;
-
-    *i = saved->i;
-    *j = saved->j;
-    *l = saved->l;
-
-    *args = saved->args;
-    *filenames = saved->filenames;
-    *input_file_flags = saved->input_file_flags;
-    *output_file_flags = saved->output_file_flags;
-
-    saved->there_are_saved_variables = 0;
-}
-
+#include <sys/socket.h>
+#include <sys/un.h>
+#define SOCKET_PATH "/tmp/myshell_socket"
 
 
 void get_prompt(char *prompt, size_t size) {
@@ -96,11 +32,6 @@ void get_prompt(char *prompt, size_t size) {
     // Format the time as HH:MM and store it in time_buf
     strftime(time_buf, sizeof(time_buf), "%H:%M", tm_info);
 
-    //
-    if (savedState.there_are_saved_variables == 1) {
-        snprintf(prompt, size, "\033[33m>\033[0m ");
-        return;
-    }
     // Format the prompt string: "HH:MM username@hostname#"
     snprintf(prompt, size,
              "\033[33m%s\033[0m "
@@ -143,109 +74,160 @@ void input_redirection(char *filename){
 }
 
 
-void execute_pipeline(char ***args, char **filenames, int row_number, int *input_file_flags, int *output_file_flags) {
+void execute_pipeline(int client_fd, char ***args, char **filenames, int row_number, int *input_file_flags, int *output_file_flags) {
 
-    // Handle exit command
-    if (strcmp(args[0][0], "exit") == 0) {
+    // Read result from result_pipe
+    char buffer[8192];
+    memset(buffer, 0, sizeof(buffer));
+    int total = 0, bytes_read;
+
+    char info_message[256] = "";
+
+
+    if (strcmp(args[0][0], "halt") == 0) {
+        snprintf(info_message, sizeof(info_message), "[HALT]");
+        if (info_message[0] != '\0') {
+            strncat(buffer, info_message, sizeof(buffer) - strlen(buffer) - 1);
+            total = strlen(buffer);
+        }
+        buffer[total] = '\0';
+        // Write to client
+        write(client_fd, buffer, total);
         printf("Exiting shell.\n");
         exit(0);
     }
 
-    // Handle cd command
-    if (strcmp(args[0][0], "cd") == 0) {
-        if (args[1] == NULL) {
-            fprintf(stderr, "cd: missing argument\n");
-        } else {
-            if (chdir(args[0][1]) != 0) {
-                perror("cd error");
-            }
+    if (strcmp(args[0][0], "quit") == 0) {
+        snprintf(info_message, sizeof(info_message), "[QUIT]");
+        if (info_message[0] != '\0') {
+            strncat(buffer, info_message, sizeof(buffer) - strlen(buffer) - 1);
+            total = strlen(buffer);
         }
+        buffer[total] = '\0';
+        // Write to client
+        write(client_fd, buffer, total);
+    }
+
+    if (strcmp(args[0][0], "cd") == 0) {
+        if (args[0][1] == NULL) {
+            snprintf(info_message, sizeof(info_message), "[ERROR] cd: missing argument\n");
+        } else if (chdir(args[0][1]) != 0) {
+            snprintf(info_message, sizeof(info_message), "[ERROR] cd: directory doesn't exist\n");
+        } else {
+            snprintf(info_message, sizeof(info_message), "[INFO] Changed directory to: %s\n", args[0][1]);
+        }
+        if (info_message[0] != '\0') {
+            strncat(buffer, info_message, sizeof(buffer) - strlen(buffer) - 1);
+        }
+        total = strlen(buffer);
+        buffer[total] = '\0';
+        // Write to client
+        write(client_fd, buffer, total);
+        printf("%s\n", buffer);
         return;
     }
 
-
-
     int pipes[row_number][2];
     pid_t pids[row_number + 1];
+    int result_pipe[2];
 
-    // Create pipes
+    if (pipe(result_pipe) == -1) {
+        perror("[ERROR] result_pipe error");
+        exit(1);
+    }
+
     for (int i = 0; i < row_number; i++) {
         if (pipe(pipes[i]) == -1) {
-            perror("Pipe error");
+            perror("[ERROR] Pipe error");
             exit(1);
         }
     }
 
-
     for (int i = 0; i <= row_number; i++) {
         pids[i] = fork();
-        if (pids[i] == 0){
-            if (i == 0) {  // The first process (cmd1)
-                if (input_file_flags[i]) input_redirection(filenames[i]);
-                if (output_file_flags[i]) {
-                    close(pipes[i][0]); // Doesn't read from pipe
-                    close(pipes[i][1]); // Doesn't write in pipe
-                    output_redirection(filenames[i]);
-                }
-                else {
-                    dup2(pipes[i][1], STDOUT_FILENO); // write in the first pipe
-                    close(pipes[i][0]); // Doesn't read from pipe
-                }
-            } else if (i == row_number) {  // Last process (cmdN)
-                if (output_file_flags[i]) output_redirection(filenames[i]);
-                if (input_file_flags[i]) {
-                    close(pipes[i - 1][0]); // Doesn't read from pipe
-                    close(pipes[i - 1][1]); // Doesn't write in pipe
-                    input_redirection(filenames[i]);
-                }
-                else {
-                    dup2(pipes[i - 1][0], STDIN_FILENO); // read from previous pipe
-                    close(pipes[i - 1][1]); // Doesn't write
-                }
-            } else {  // Middle processes (cmd2, cmd3, ..., cmdN-1)
-                if (input_file_flags[i]) {
-                    close(pipes[i - 1][0]); // Doesn't read from pipe
-                    input_redirection(filenames[i]);
-                } else
-                    dup2(pipes[i - 1][0], STDIN_FILENO); // read from previous pipe
+        if (pids[i] == 0) {
+            // CHILD PROCESS
 
-                if (output_file_flags[i]) {
-                    close(pipes[i][1]); // Doesn't write in pipe
-                    output_redirection(filenames[i]);
-                } else
-                    dup2(pipes[i][1], STDOUT_FILENO); // write in the first pipe
-
-                close(pipes[i - 1][1]); // close unnecessary pipe
-                close(pipes[i][0]); // close unnecessary pipe
+            // Input redirection
+            if (input_file_flags[i]) {
+                input_redirection(filenames[i]);
+            } else if (i > 0) {
+                dup2(pipes[i - 1][0], STDIN_FILENO);
             }
 
-            // Close all pipes in child process
+            // Output redirection
+            if (output_file_flags[i]) {
+                output_redirection(filenames[i]);
+            } else if (i < row_number) {
+                dup2(pipes[i][1], STDOUT_FILENO);
+            } else {
+                dup2(result_pipe[1], STDOUT_FILENO); // last process writes to result_pipe
+            }
+
+            dup2(STDOUT_FILENO, STDERR_FILENO);
+
+            // Close all pipe ends after dup2
             for (int j = 0; j < row_number; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
 
-            // Replace the current process with the desired command
+            // Close unused ends of result_pipe
+            close(result_pipe[0]);
+            if (i != row_number || output_file_flags[i]) {
+                close(result_pipe[1]);
+            }
+
             execvp(args[i][0], args[i]);
-            perror("Execution error");
+            perror("[ERROR] Execution error");
             exit(1);
         } else if (pids[i] < 0) {
-            perror("Fork error");
+            perror("[ERROR] Fork error");
             exit(1);
         }
     }
 
-    // Close all pipes to avoid leaks
+    // PARENT PROCESS
+
+    // Close all pipe ends in parent
     for (int i = 0; i < row_number; i++) {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
-    // The parent is waiting for the completion of all processes
+
+    close(result_pipe[1]); // parent only reads
+
+    // Wait for all children
     for (int i = 0; i <= row_number; i++) {
         waitpid(pids[i], NULL, 0);
     }
 
+
+    while ((bytes_read = read(result_pipe[0], buffer + total, sizeof(buffer) - total - 1)) > 0) {
+        total += bytes_read;
+    }
+
+    if (!total) {
+        int filename_index = -1;
+        for (int i = 0; i <= row_number; i++)
+            if (output_file_flags[i]) {filename_index = i; break;}
+        if (filename_index != -1) {
+            snprintf(info_message, sizeof(info_message), "[INFO] Output saved to file: %s\n", filenames[filename_index]);
+        }
+    }
+
+    if (info_message[0] != '\0') {
+        strncat(buffer, info_message, sizeof(buffer) - strlen(buffer) - 1);
+        total = strlen(buffer);
+    }
+
+    buffer[total] = '\0';
+    close(result_pipe[0]);
+
+    // Write to client
+    write(client_fd, buffer, total);
 }
+
 
 char* read_filename(char **cur_char){
     char *filename = (char *)calloc(20, sizeof(char));
@@ -276,7 +258,7 @@ void free_args(char ****args, int num_commands, int num_args_per_command) {
     *args = NULL;
 }
 
-void handle_command(char *command) {
+void handle_command(int client_fd, char *command) {
     int num_commands = 10;
     int num_args_per_command = 5;
     int max_arg_length = 20;
@@ -288,7 +270,7 @@ void handle_command(char *command) {
     // Allocate memory for storing command arguments
     char ***args = (char ***)calloc(num_commands, sizeof(char **));
     if (!args) {
-        perror("Memory allocation failed");
+        perror("[ERROR] Memory allocation failed");
         exit(1);
     }
 
@@ -296,14 +278,14 @@ void handle_command(char *command) {
     for (int i = 0; i < num_commands; i++) {
         args[i] = (char **)calloc(num_args_per_command, sizeof(char *));
         if (!args[i]) {
-            perror("Memory allocation failed");
+            perror("[ERROR] Memory allocation failed");
             exit(1);
         }
 
         for (int j = 0; j < num_args_per_command; j++) {
             args[i][j] = (char *)calloc(max_arg_length, sizeof(char));
             if (!args[i][j]) {
-                perror("Memory allocation failed");
+                perror("[ERROR] Memory allocation failed");
                 exit(1);
             }
         }
@@ -314,11 +296,6 @@ void handle_command(char *command) {
     int l = 0;
     char *cur_char = command;
     char **filenames = (char **)calloc(max_arg_length, sizeof(char *));
-
-    if (savedState.there_are_saved_variables == 1) {
-        restore_state(&savedState, &i, &j, &l, &args, &filenames, &input_file_flags, &output_file_flags);
-    }
-
 
     // Loop through the command string to parse arguments
     while (*cur_char != '\n') {
@@ -350,7 +327,7 @@ void handle_command(char *command) {
             }
             args[i][j] = NULL;
 
-            execute_pipeline(args, filenames, i, input_file_flags, output_file_flags);
+            execute_pipeline(client_fd, args, filenames, i, input_file_flags, output_file_flags);
 
             // Reset argument storage for next command
             for (int row = 0; row <= i; row++) {
@@ -386,23 +363,8 @@ void handle_command(char *command) {
             cur_char++;
             continue;
         }
-
-        if (*cur_char == '\\') {
-            // If the next character is a newline, we skip it
-            if (*(cur_char + 1) == '\n') {
-                cur_char++;
-                continue;
-            }
-        }
-
         // Store the command argument character by character
         args[i][j][l++] = *(cur_char++);
-    }
-
-    // If the previous character is '\', then save state
-    if (*(cur_char - 1) == '\\') {
-        save_state(&savedState, i, j, l, args, filenames, input_file_flags, output_file_flags, num_commands, num_args_per_command);
-        return;
     }
 
     if (l > 0) {
@@ -418,7 +380,7 @@ void handle_command(char *command) {
     }
 
     // Execute the parsed pipeline
-    execute_pipeline(args, filenames, i, input_file_flags, output_file_flags);
+    execute_pipeline(client_fd, args, filenames, i, input_file_flags, output_file_flags);
 
     // Free allocated memory
     free_args(&args, num_commands, num_args_per_command);
@@ -426,50 +388,182 @@ void handle_command(char *command) {
     free(output_file_flags);
 }
 
+void run_server(char *socket_path) {
+    int server_fd, client_fd;
+    struct sockaddr_un server_addr, client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    char buffer[1024];
+
+    // Remove any existing socket file
+    unlink(socket_path);
+
+    // Create UNIX domain socket
+    server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("[ERROR] Socket creation failed");
+        exit(1);
+    }
+
+    // Configure socket address structure
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    strncpy(server_addr.sun_path, socket_path, sizeof(server_addr.sun_path) - 1);
+
+    // Bind the socket to the file path
+    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("[ERROR] Bind failed");
+        exit(1);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_fd, 5) < 0) {
+        perror("[ERROR] Listen failed");
+        exit(1);
+    }
+
+    printf("[INFO] Server is listening on socket: %s\n", socket_path);
+
+    // Main server loop
+    while (1) {
+        // Accept a new client connection
+        client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+        if (client_fd < 0) {
+            perror("[ERROR] Accept failed");
+            continue;
+        }
+
+        printf("[INFO] Client connected.\n");
+
+        // Handle communication with the connected client
+        while (1) {
+            int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+            if (bytes_read <= 0) {
+                printf("[ERROR] Client disconnected.\n");
+                break;
+            }
+
+            buffer[bytes_read] = '\0';
+            printf("[INFO] Command from client: %s\n", buffer);
+
+            // Pass the received command to the command handler
+            handle_command(client_fd, buffer);
+        }
+
+        // Close client connection
+        close(client_fd);
+    }
+
+    // Cleanup
+    close(server_fd);
+    unlink(socket_path);
+}
+
+
+void run_client(char *socket_path) {
+    int sock;
+    struct sockaddr_un server_addr;
+    char prompt[256];
+    char buffer[1024];
+
+    // Create UNIX domain socket
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    // Configure server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    strncpy(server_addr.sun_path, socket_path, sizeof(server_addr.sun_path) - 1);
+
+    // Connect to the server
+    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("[ERROR] Connection failed");
+        exit(1);
+    }
+
+    printf("[INFO] Connected to server.\n");
+
+    // Main input loop
+    while (1) {
+        get_prompt(prompt, sizeof(prompt)); // Get current prompt string
+        printf("%s ", prompt);
+        fflush(stdout);
+
+        // Read input from user
+        if (!fgets(buffer, sizeof(buffer), stdin)) {
+            printf("\nExiting.\n");
+            break;
+        }
+
+        if (strlen(buffer) == 1) continue; // Skip empty input (only newline)
+
+        // Send command to server
+        write(sock, buffer, strlen(buffer));
+
+        // Read response from server
+        int bytes_read = read(sock, buffer, sizeof(buffer) - 1);
+        if (bytes_read < 0) {
+            perror("[ERROR] Failed to read from server");
+            break;
+        } else if (bytes_read == 0) {
+            printf("[ERROR] Connection to server was closed.\n");
+            break;
+        }
+
+        if (strncmp(buffer, "[QUIT]", 6) == 0) {
+            printf("[CLIENT] Quit command issued. Disconnecting.\n");
+            break;
+        }
+
+        // Optional: if server returns "halt", exit immediately
+        if (strncmp(buffer, "[HALT]", 6) == 0) {
+            printf("[INFO] Server requested shutdown. Exiting.\n");
+            break;
+        }
+
+        buffer[bytes_read] = '\0';
+
+        // Print server response
+        printf("%s\n", buffer);
+    }
+
+    // Close socket connection
+    close(sock);
+}
+
 
 
 
 int main(int argc, char *argv[]) {
-    int is_server = 0, is_client = 0;
-    char *socket_path = NULL;
-    int port = 0;
+    int is_server = 1, is_client = 0;
+    char *socket_path = SOCKET_PATH; // Значение по умолчанию
     int opt;
 
-    while ((opt = getopt(argc, argv, "scp:u:h")) != -1) {
+    while ((opt = getopt(argc, argv, "scu:h")) != -1) {
         switch (opt) {
             case 's':
                 is_server = 1;
                 break;
             case 'c':
                 is_client = 1;
-                break;
-            case 'p':
-                port = atoi(optarg);
-                break;
+                is_server = 0;
             case 'u':
                 socket_path = optarg;
                 break;
             case 'h':
+                printf("Use: %s [-s | -c] [-u path/to/socket]\n", argv[0]);
                 return 0;
             default:
                 return 1;
         }
     }
 
-    char prompt[256];
-    char command[1024];
-
-    while (1) {
-        get_prompt(prompt, sizeof(prompt));
-        printf("%s ", prompt);
-        fflush(stdout);
-
-        if (!fgets(command, sizeof(command), stdin)) {
-            printf("\nВыход.\n");
-            break;
-        }
-
-        handle_command(command);
+    if (is_server) {
+        run_server(socket_path);
+    } else if (is_client) {
+        run_client(socket_path);
     }
 
     return 0;
