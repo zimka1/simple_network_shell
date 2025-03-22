@@ -1,0 +1,19 @@
+# JetBrains IDE config
+.idea/
+
+# CLion / CMake build output
+cmake-build-debug/
+CMakeLists.txt
+
+# dSYM (macOS debug symbols)
+shell.dSYM/
+
+files/
+
+shell
+
+*.o
+*.out
+*.log
+*.tmp
+

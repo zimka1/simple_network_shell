@@ -6,7 +6,7 @@ void execute_pipeline(int client_fd, char ***args, char **filenames, int row_num
 void handle_command(int client_fd, char *command);
 void output_redirection(char *filename);
 void input_redirection(char *filename);
-void run_server(char *socket_path);
-
+void run_unix_server(char *socket_path);
+void run_tcp_server(int port);
 
 #endif //MYSHELL_SERVER_H

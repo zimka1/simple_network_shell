@@ -6,6 +6,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <arpa/inet.h>
+
 
 void get_prompt(char *prompt, size_t size) {
     // Get the username of the current user
@@ -37,78 +39,117 @@ void get_prompt(char *prompt, size_t size) {
              time_buf, pw->pw_name, hostname);
 }
 
-
-
-void run_client(char *socket_path) {
-    int sock;
-    struct sockaddr_un server_addr;
+void main_connection_loop(int sock) {
     char prompt[256];
     char buffer[1024];
 
-    // Create UNIX domain socket
-    sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) {
-        perror("Socket creation failed");
-        exit(1);
-    }
-
-    // Configure server address
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sun_family = AF_UNIX;
-    strncpy(server_addr.sun_path, socket_path, sizeof(server_addr.sun_path) - 1);
-
-    // Connect to the server
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("[ERROR] Connection failed");
-        exit(1);
-    }
-
-    printf("[INFO] Connected to server.\n");
-
-    // Main input loop
     while (1) {
-        get_prompt(prompt, sizeof(prompt)); // Get current prompt string
+        get_prompt(prompt, sizeof(prompt)); // Generate shell prompt
         printf("%s ", prompt);
         fflush(stdout);
 
-        // Read input from user
+        // Read command from user
         if (!fgets(buffer, sizeof(buffer), stdin)) {
-            printf("\nExiting.\n");
+            printf("\n[CLIENT] Input closed. Exiting.\n");
             break;
         }
 
-        if (strlen(buffer) == 1) continue; // Skip empty input (only newline)
+        // Skip empty lines
+        if (strlen(buffer) <= 1) continue;
+
+        // Remove trailing newline
+        buffer[strcspn(buffer, "\n")] = '\0';
 
         // Send command to server
-        write(sock, buffer, strlen(buffer));
+        if (write(sock, buffer, strlen(buffer)) < 0) {
+            perror("[CLIENT] Failed to send command");
+            break;
+        }
 
-        // Read response from server
+        // Receive response from server
         int bytes_read = read(sock, buffer, sizeof(buffer) - 1);
         if (bytes_read < 0) {
-            perror("[ERROR] Failed to read from server");
+            perror("[CLIENT] Failed to read from server");
             break;
         } else if (bytes_read == 0) {
-            printf("[ERROR] Connection to server was closed.\n");
-            break;
-        }
-
-        if (strncmp(buffer, "[QUIT]", 6) == 0) {
-            printf("[CLIENT] Quit command issued. Disconnecting.\n");
-            break;
-        }
-
-        // Optional: if server returns "halt", exit immediately
-        if (strncmp(buffer, "[HALT]", 6) == 0) {
-            printf("[INFO] Server requested shutdown. Exiting.\n");
+            printf("[CLIENT] Server closed the connection.\n");
             break;
         }
 
         buffer[bytes_read] = '\0';
 
-        // Print server response
+        if (strncmp(buffer, "[QUIT]", 6) == 0) {
+            printf("[CLIENT] Quit command received. Disconnecting.\n");
+            break;
+        }
+
+        if (strncmp(buffer, "[HALT]", 6) == 0) {
+            printf("[CLIENT] Server requested shutdown. Exiting.\n");
+            break;
+        }
+
+        // Print server's response
         printf("%s\n", buffer);
     }
+}
 
-    // Close socket connection
+
+void run_unix_client(char *socket_path) {
+    int sock;
+    struct sockaddr_un server_addr;
+
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("[CLIENT] UNIX socket creation failed");
+        exit(1);
+    }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    strncpy(server_addr.sun_path, socket_path, sizeof(server_addr.sun_path) - 1);
+
+    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("[CLIENT] UNIX connection failed");
+        close(sock);
+        exit(1);
+    }
+
+    printf("[CLIENT] Connected to UNIX socket: %s\n", socket_path);
+
+    main_connection_loop(sock);
+
+    close(sock);
+}
+
+void run_tcp_client(const char *host, int port) {
+    int sock;
+    struct sockaddr_in server_addr;
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("[CLIENT] TCP socket creation failed");
+        exit(1);
+    }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, host, &server_addr.sin_addr) <= 0) {
+        perror("[CLIENT] Invalid host IP address");
+        close(sock);
+        exit(1);
+    }
+
+    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("[CLIENT] TCP connection failed");
+        close(sock);
+        exit(1);
+    }
+
+    printf("[CLIENT] Connected to TCP %s:%d\n", host, port);
+
+    main_connection_loop(sock);
+
     close(sock);
 }

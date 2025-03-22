@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <arpa/inet.h>
 
 
 void output_redirection(char *filename) {
@@ -357,11 +358,43 @@ void handle_command(int client_fd, char *command) {
 }
 
 
-void run_server(char *socket_path) {
-    int server_fd, client_fd;
-    struct sockaddr_un server_addr, client_addr;
+void main_server_loop(int server_fd) {
+    int client_fd;
+    struct sockaddr_storage client_addr;
     socklen_t client_len = sizeof(client_addr);
     char buffer[1024];
+
+    while (1) {
+        client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+        if (client_fd < 0) {
+            perror("[ERROR] Accept failed");
+            continue;
+        }
+
+        printf("[INFO] Client connected.\n");
+
+        while (1) {
+            int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+            if (bytes_read <= 0) {
+                printf("[INFO] Client disconnected.\n");
+                break;
+            }
+
+            buffer[bytes_read] = '\0';
+            printf("[INFO] Command from client: %s\n", buffer);
+
+            handle_command(client_fd, buffer);
+        }
+
+        close(client_fd);
+    }
+}
+
+
+
+void run_unix_server(char *socket_path) {
+    int server_fd;
+    struct sockaddr_un server_addr;
 
     // Remove any existing socket file
     unlink(socket_path);
@@ -369,7 +402,7 @@ void run_server(char *socket_path) {
     // Create UNIX domain socket
     server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server_fd < 0) {
-        perror("[ERROR] Socket creation failed");
+        perror("Unix socket creation failed");
         exit(1);
     }
 
@@ -380,49 +413,58 @@ void run_server(char *socket_path) {
 
     // Bind the socket to the file path
     if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("[ERROR] Bind failed");
+        perror("Unix bind failed");
         exit(1);
     }
 
     // Listen for incoming connections
     if (listen(server_fd, 5) < 0) {
-        perror("[ERROR] Listen failed");
+        perror("Unix listen failed");
         exit(1);
     }
 
-    printf("[INFO] Server is listening on socket: %s\n", socket_path);
+    printf("[UNIX SERVER] Server is listening on unix socket: %s\n", socket_path);
 
-    // Main server loop
-    while (1) {
-        // Accept a new client connection
-        client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-        if (client_fd < 0) {
-            perror("[ERROR] Accept failed");
-            continue;
-        }
-
-        printf("[INFO] Client connected.\n");
-
-        // Handle communication with the connected client
-        while (1) {
-            int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-            if (bytes_read <= 0) {
-                printf("[ERROR] Client disconnected.\n");
-                break;
-            }
-
-            buffer[bytes_read] = '\0';
-            printf("[INFO] Command from client: %s\n", buffer);
-
-            // Pass the received command to the command handler
-            handle_command(client_fd, buffer);
-        }
-
-        // Close client connection
-        close(client_fd);
-    }
+    main_server_loop(server_fd);
 
     // Cleanup
     close(server_fd);
     unlink(socket_path);
+}
+
+
+void run_tcp_server(int port) {
+    int server_fd;
+    struct sockaddr_in server_addr;
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("TCP socket creation failed");
+        exit(1);
+    }
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("TCP bind failed");
+        exit(1);
+    }
+
+    if (listen(server_fd, 5) < 0) {
+        perror("TCP listen failed");
+        exit(1);
+    }
+
+    printf("[TCP SERVER] Listening on port %d...\n", port);
+
+    main_server_loop(server_fd);
+
+
+    close(server_fd);
 }
