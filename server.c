@@ -362,7 +362,6 @@ void main_server_loop(int server_fd) {
     int client_fd;
     struct sockaddr_storage client_addr;
     socklen_t client_len = sizeof(client_addr);
-    char buffer[1024];
 
     while (1) {
         client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
@@ -373,20 +372,39 @@ void main_server_loop(int server_fd) {
 
         printf("[INFO] Client connected.\n");
 
-        while (1) {
-            int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-            if (bytes_read <= 0) {
-                printf("[INFO] Client disconnected.\n");
-                break;
-            }
+        pid_t pid = fork();
 
-            buffer[bytes_read] = '\0';
-            printf("[INFO] Command from client: %s\n", buffer);
-
-            handle_command(client_fd, buffer);
+        if (pid < 0) {
+            perror("[ERROR] Fork failed");
+            close(client_fd);
+            continue;
         }
 
-        close(client_fd);
+        if (pid == 0) {
+            // CHILD: handle client
+            close(server_fd); // child doesn't need listening socket
+            char buffer[1024];
+
+            while (1) {
+                int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+                if (bytes_read <= 0) {
+                    printf("[INFO] Client disconnected (PID %d).\n", getpid());
+                    break;
+                }
+
+                buffer[bytes_read] = '\0';
+                printf("[INFO] (PID %d) Command from client: %s\n", getpid(), buffer);
+
+                handle_command(client_fd, buffer);
+            }
+
+            close(client_fd);
+            exit(0);
+        } else {
+            // PARENT: continue accepting
+            close(client_fd); // parent doesn't handle this client directly
+        }
+
     }
 }
 
