@@ -357,6 +357,10 @@ void handle_command(int client_fd, char *command) {
     free(output_file_flags);
 }
 
+//typedef struct HER {
+//    int pid;
+//    struct HER *next;
+//};
 
 void main_server_loop(int server_fd) {
     int client_fd;
@@ -451,7 +455,7 @@ void run_unix_server(char *socket_path) {
 }
 
 
-void run_tcp_server(int port) {
+void run_tcp_server(const char *host, int port) {
     int server_fd;
     struct sockaddr_in server_addr;
 
@@ -467,7 +471,16 @@ void run_tcp_server(int port) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (host == NULL) {
+        server_addr.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        if (inet_pton(AF_INET, host, &server_addr.sin_addr) <= 0) {
+            perror("[SERVER] Invalid IP address");
+            close(server_fd);
+            exit(1);
+        }
+    }
 
     if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("TCP bind failed");
@@ -479,7 +492,7 @@ void run_tcp_server(int port) {
         exit(1);
     }
 
-    printf("[TCP SERVER] Listening on port %d...\n", port);
+    printf("[TCP SERVER] Listening on %s:%d...\n", port);
 
     main_server_loop(server_fd);
 
