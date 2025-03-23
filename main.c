@@ -1,10 +1,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include "server.h"
 #include "client.h"
 
 #define SOCKET_PATH "/tmp/myshell_socket"
+
+
+void run_script(const char *filename){
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("[ERROR] Cannot open script file");
+        return;
+    }
+    char command[1024];
+    while (fgets(command, sizeof(command), file)) {
+        if (strlen(command) > 0) {
+            handle_command(-1, command);
+        }
+    }
+
+    fclose(file);
+}
 
 
 int main(int argc, char *argv[]) {
@@ -39,6 +57,12 @@ int main(int argc, char *argv[]) {
             default:
                 return 1;
         }
+    }
+
+    if (optind < argc) {
+        const char *script_file = argv[optind];
+        run_script(script_file);
+        return 0;
     }
 
     if (is_server) {

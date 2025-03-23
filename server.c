@@ -43,7 +43,7 @@ void input_redirection(char *filename){
 
 
 
-void execute_pipeline(int client_fd, char ***args, char **filenames, int row_number, int *input_file_flags, int *output_file_flags) {
+void execute_command(int client_fd, char ***args, char **filenames, int row_number, int *input_file_flags, int *output_file_flags) {
 
     // Read result from result_pipe
     char buffer[8192];
@@ -61,8 +61,8 @@ void execute_pipeline(int client_fd, char ***args, char **filenames, int row_num
         }
         buffer[total] = '\0';
         // Write to client
-        write(client_fd, buffer, total);
-        printf("Exiting shell.\n");
+        if (client_fd > 0) write(client_fd, buffer, total);
+        else printf("Server closed.\n");
         exit(0);
     }
 
@@ -74,7 +74,8 @@ void execute_pipeline(int client_fd, char ***args, char **filenames, int row_num
         }
         buffer[total] = '\0';
         // Write to client
-        write(client_fd, buffer, total);
+        if (client_fd > 0) write(client_fd, buffer, total);
+        else printf("%s\n", buffer);
     }
 
     if (strcmp(args[0][0], "cd") == 0) {
@@ -91,8 +92,8 @@ void execute_pipeline(int client_fd, char ***args, char **filenames, int row_num
         total = strlen(buffer);
         buffer[total] = '\0';
         // Write to client
-        write(client_fd, buffer, total);
-        printf("%s\n", buffer);
+        if (client_fd > 0) write(client_fd, buffer, total);
+        else printf("%s\n", buffer);
         return;
     }
 
@@ -194,7 +195,8 @@ void execute_pipeline(int client_fd, char ***args, char **filenames, int row_num
     close(result_pipe[0]);
 
     // Write to client
-    write(client_fd, buffer, total);
+    if (client_fd > 0) write(client_fd, buffer, total);
+    else printf("%s\n", buffer);
 }
 
 
@@ -211,7 +213,6 @@ char* read_filename(char **cur_char){
         *(cur_char_filename++) = **cur_char;
         (*cur_char)++;
     }
-
     return filename;
 }
 
@@ -296,7 +297,7 @@ void handle_command(int client_fd, char *command) {
             }
             args[i][j] = NULL;
 
-            execute_pipeline(client_fd, args, filenames, i, input_file_flags, output_file_flags);
+            execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags);
 
             // Reset argument storage for next command
             for (int row = 0; row <= i; row++) {
@@ -349,7 +350,7 @@ void handle_command(int client_fd, char *command) {
     }
 
     // Execute the parsed pipeline
-    execute_pipeline(client_fd, args, filenames, i, input_file_flags, output_file_flags);
+    execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags);
 
     // Free allocated memory
     free_args(&args, num_commands, num_args_per_command);
@@ -492,7 +493,7 @@ void run_tcp_server(const char *host, int port) {
         exit(1);
     }
 
-    printf("[TCP SERVER] Listening on %s:%d...\n", port);
+    printf("[TCP SERVER] Listening on %s:%d...\n", host, port);
 
     main_server_loop(server_fd);
 
