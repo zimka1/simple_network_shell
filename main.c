@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
     int tcp_port = -1;
     int opt;
 
-    while ((opt = getopt(argc, argv, "scu:p:h:i:")) != -1) {
+    while ((opt = getopt(argc, argv, "scu:p:h:i:C:")) != -1) {
         switch (opt) {
             case 's':
                 is_server = 1;
@@ -52,8 +52,11 @@ int main(int argc, char *argv[]) {
             case 'i':
                 host = optarg;
                 break;
+            case 'C':
+                command_to_run = optarg;
+                break;
             case 'h':
-                printf("Usage: %s [-s | -c] [-u path/to/socket | -p tcp_port] [-i host_ip]\n", argv[0]);
+                printf("Usage: %s [-s | -c] [-u path/to/socket | -p tcp_port] [-i host_ip] [-C \"command\"]\n", argv[0]);
                 return 0;
             default:
                 return 1;
@@ -66,12 +69,14 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    if (is_client && optind < argc) {
-        if (argv[optind][0] != '-') {
-            command_to_run = argv[optind];
-            command_to_run[strlen(command_to_run)] = '\n';
-            handle_command(-1, command_to_run);
-        }
+    if (command_to_run) {
+        size_t len = strlen(command_to_run);
+        char command_buf[512];
+        snprintf(command_buf, sizeof(command_buf), "%s%s", command_to_run,
+                 (command_to_run[len - 1] == '\n') ? "" : "\n");
+
+        // Execute locally OR send to server
+        handle_command(-1, command_buf);  // -1 = print to stdout
         return 0;
     }
 

@@ -41,17 +41,16 @@ void get_prompt(char *prompt, size_t size) {
 }
 
 void main_connection_loop(int sock) {
-    char prompt[256];          // Stores the command prompt
-    char buffer[5096];         // Buffer for server responses
-    char input_buf[1024];      // Buffer for user input
-    char total_response[10000] = ""; // Accumulates multi-part responses
-    int waiting_for_response = 0;    // Flag indicating if we're expecting server response
+    char prompt[256];          // Command prompt
+    char buffer[4096];         // Buffer for incoming data
+    char input_buf[1024];      // User input buffer
+    int waiting_for_response = 0;  // Are we expecting a response?
 
-    // Set non-blocking mode for both socket and stdin
+    // Set non-blocking I/O
     fcntl(sock, F_SETFL, O_NONBLOCK);
     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-    // Get and display initial prompt
+    // Initial prompt
     get_prompt(prompt, sizeof(prompt));
     printf("%s", prompt);
     fflush(stdout);
@@ -59,17 +58,12 @@ void main_connection_loop(int sock) {
     while (1) {
         fd_set read_fds;
         FD_ZERO(&read_fds);
-
-        // Only monitor stdin if we're not waiting for response
-        if (!waiting_for_response) {
+        if (!waiting_for_response)
             FD_SET(STDIN_FILENO, &read_fds);
-        }
-        FD_SET(sock, &read_fds); // Always monitor the socket
+        FD_SET(sock, &read_fds);
 
-        // Determine the highest file descriptor
         int max_fd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
 
-        // Wait for activity on either stdin or socket
         int ready = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
         if (ready < 0) {
             perror("[CLIENT] select failed");
@@ -83,74 +77,62 @@ void main_connection_loop(int sock) {
                 break;
             }
 
-            // Skip empty input
             if (strlen(input_buf) <= 1) {
                 printf("%s", prompt);
                 fflush(stdout);
                 continue;
             }
 
-            // Send command to server
             if (write(sock, input_buf, strlen(input_buf)) < 0) {
                 perror("[CLIENT] Failed to send command");
                 break;
             }
 
-            // Prepare for server response
             waiting_for_response = 1;
-            total_response[0] = '\0'; // Clear response buffer
         }
 
         // Handle server response
         if (FD_ISSET(sock, &read_fds)) {
-            int bytes = read(sock, buffer, sizeof(buffer) - 1);
-            if (bytes <= 0) {
-                printf("[CLIENT] Server closed the connection.\n");
-                break;
-            }
-            buffer[bytes] = '\0';
+            int bytes;
+            while ((bytes = read(sock, buffer, sizeof(buffer) - 1)) > 0) {
+                buffer[bytes] = '\0';
 
-            // Check for special control messages
-            if (strncmp(buffer, "[HALT]", 6) == 0) {
-                printf("[CLIENT] Server halted. Exiting.\n");
-                break;
-            }
-
-            if (strncmp(buffer, "[QUIT]", 6) == 0) {
-                printf("[CLIENT] Quit command received. Disconnecting.\n");
-                break;
-            }
-            if (strncmp(buffer, "[ABORT]", 7) == 0) {
-                printf("\n[CLIENT] Abort!\n");
-                break;
-            }
-
-            // Handle unsolicited server messages
-            if (!waiting_for_response) {
-                printf("\n[SERVER MESSAGE] %s\n", buffer);
-                printf("%s", prompt);
-                fflush(stdout);
-                continue;
-            }
-
-            // Accumulate response and check for end marker
-            strcat(total_response, buffer);
-            if (strstr(total_response, "[END]")) {
-                char *end_marker = strstr(total_response, "[END]");
-                if (end_marker) {
-                    *end_marker = '\0';
+                // Control messages — must match exactly
+                if (strncmp(buffer, "[HALT]", 6) == 0) {
+                    printf("[CLIENT] Server halted. Exiting.\n");
+                    exit(0);
+                }
+                if (strncmp(buffer, "[QUIT]", 6) == 0) {
+                    printf("[CLIENT] Quit command received. Disconnecting.\n");
+                    exit(0);
+                }
+                if (strncmp(buffer, "[ABORT]", 7) == 0) {
+                    printf("\n[CLIENT] Abort!\n");
+                    exit(0);
                 }
 
-                // Display complete response
-                printf("%s\n", total_response);
-                fflush(stdout);
+                // Expected response — when waiting
+                if (waiting_for_response) {
+                    // Process [END]
+                    char *end_marker = strstr(buffer, "[END]");
+                    if (end_marker) {
+                        *end_marker = '\0';
+                        printf("%s\n", buffer);
+                        fflush(stdout);
+                        waiting_for_response = 0;
 
-                // Reset for next command
-                waiting_for_response = 0;
-                get_prompt(prompt, sizeof(prompt));
-                printf("%s", prompt);
-                fflush(stdout);
+                        get_prompt(prompt, sizeof(prompt));
+                        printf("%s", prompt);
+                        fflush(stdout);
+                        break;
+                    }
+
+                    // Otherwise, part of ongoing response
+                    printf("%s", buffer);
+                    fflush(stdout);
+                }
             }
+
         }
     }
 }

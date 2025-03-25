@@ -10,6 +10,9 @@
 #include <arpa/inet.h>
 #include "redirections.h"
 
+#define CHUNK_SIZE 512
+
+
 char* read_filename(char **cur_char){
     char *filename = (char *)calloc(20, sizeof(char));
 
@@ -26,7 +29,6 @@ char* read_filename(char **cur_char){
     return filename;
 }
 
-
 void free_args(char ****args, int num_commands, int num_args_per_command) {
     for (int row = 0; row < num_commands; row++) {
         for (int call = 0; call < num_args_per_command; call++) {
@@ -38,10 +40,10 @@ void free_args(char ****args, int num_commands, int num_args_per_command) {
     *args = NULL;
 }
 
-void execute_command(int client_fd, char ***args, char **filenames, int row_number, int *input_file_flags, int *output_file_flags) {
+void execute_command(int client_fd, char ***args, char **filenames, int row_number, const int *input_file_flags, const int *output_file_flags) {
 
-    char buffer[5096];
-    memset(buffer, 0, sizeof(buffer));
+    char chunk_buf[CHUNK_SIZE];
+    memset(chunk_buf, 0, sizeof(chunk_buf));
     int total = 0, bytes_read;
 
     char info_message[256] = "";
@@ -66,16 +68,16 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
             snprintf(info_message, sizeof(info_message), "[INFO] Changed directory to: %s\n", args[0][1]);
         }
         if (info_message[0] != '\0') {
-            strncat(buffer, info_message, sizeof(buffer) - strlen(buffer) - 1);
+            strncat(chunk_buf, info_message, sizeof(chunk_buf) - strlen(chunk_buf) - 1);
         }
-        total = strlen(buffer);
-        buffer[total] = '\0';
+        total = strlen(chunk_buf);
+        chunk_buf[total] = '\0';
         // Write to client
         if (client_fd > 0) {
-            write(client_fd, buffer, total);
+            write(client_fd, chunk_buf, total);
             write(client_fd, "[END]", 5);
         }
-        else printf("%s\n", buffer);
+        else printf("%s\n", chunk_buf);
         return;
     }
 
@@ -141,6 +143,14 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
     }
 
     // PARENT PROCESS
+    close(result_pipe[1]); // parent only reads
+
+    while ((bytes_read = read(result_pipe[0], chunk_buf, sizeof(chunk_buf))) > 0) {
+        if (client_fd > 0)
+            write(client_fd, chunk_buf, bytes_read);
+        else
+            printf("%s", chunk_buf);
+    }
 
     // Close all pipe ends in parent
     for (int i = 0; i < row_number; i++) {
@@ -148,41 +158,27 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
         close(pipes[i][1]);
     }
 
-    close(result_pipe[1]); // parent only reads
-
     // Wait for all children
     for (int i = 0; i <= row_number; i++) {
         waitpid(pids[i], NULL, 0);
     }
 
-
-    while ((bytes_read = read(result_pipe[0], buffer + total, sizeof(buffer) - total - 1)) > 0) {
-        total += bytes_read;
-    }
-
-    if (!total) {
+    if (!bytes_read) {
         int filename_index = -1;
-        for (int i = 0; i <= row_number; i++)
-            if (output_file_flags[i]) {filename_index = i; break;}
+        for (int i = 0; i <= row_number; i++) {
+            if (output_file_flags[i]) {
+                filename_index = i;
+                break;
+            }
+        }
         if (filename_index != -1) {
             snprintf(info_message, sizeof(info_message), "[INFO] Output saved to file: %s\n", filenames[filename_index]);
+            write(client_fd, info_message, strlen(info_message));
         }
     }
 
-    if (info_message[0] != '\0') {
-        strncat(buffer, info_message, sizeof(buffer) - strlen(buffer) - 1);
-        total = strlen(buffer);
-    }
-
-    buffer[total] = '\0';
+    write(client_fd, "\n[END]\n", 7);
     close(result_pipe[0]);
-
-    // Write to client
-    if (client_fd > 0) {
-        write(client_fd, buffer, total);
-        write(client_fd, "\n[END]\n", 7);
-    }
-    else printf("%s\n", buffer);
 }
 
 void handle_command(int client_fd, char *command) {
@@ -435,6 +431,7 @@ void main_server_loop(int server_fd) {
         // Handle commands from child process
         if (FD_ISSET(control_pipe[0], &read_fds)) {
             char parent_buffer[256];
+
             ssize_t bytes = read(control_pipe[0], parent_buffer, sizeof(parent_buffer) - 1);
             if (bytes > 0) {
                 parent_buffer[bytes] = '\0';
@@ -445,7 +442,7 @@ void main_server_loop(int server_fd) {
                     int sender_pid = atoi(strtok(NULL, " "));
 
                     // Prepare info message for sender
-                    char info_message[256] = "", buffer[512];
+                    char info_message[256] = "", buffer[512] = "";
                     int total = 0;
                     snprintf(info_message, sizeof(info_message), "[INFO] Aborted connection for ID %d\n", arg_id);
                     if (info_message[0] != '\0') {
@@ -460,12 +457,15 @@ void main_server_loop(int server_fd) {
                     if (sender_fd == arg_fd) {
                         write(arg_fd, "[ABORT]", 7);
                         write(arg_fd, "[END]", 5);
-                    } else if (sender_fd >= 0) {
-                        write(sender_fd, buffer, total);
-                        write(sender_fd, "[END]", 5);
-                    } else if (arg_fd >= 0) {
-                        write(arg_fd, "[ABORT]", 7);
-                        write(arg_fd, "[END]", 5);
+                    } else {
+                        if (sender_fd >= 0) {
+                            write(sender_fd, buffer, total);
+                            write(sender_fd, "[END]", 5);
+                        }
+                        if (arg_fd >= 0) {
+                            write(arg_fd, "[ABORT]", 7);
+                            write(arg_fd, "[END]", 5);
+                        }
                     }
 
                     // Abort connection for chosen id
@@ -539,7 +539,6 @@ void main_server_loop(int server_fd) {
                         break;
                     }
 
-                    buffer[bytes_read] = '\0';
                     printf("[INFO] (PID %d) Command from client: %s\n", getpid(), buffer);
 
                     // Forward special commands to parent
@@ -556,6 +555,7 @@ void main_server_loop(int server_fd) {
                         snprintf(msg, sizeof(msg), "%s %d\n", buffer, getpid());
                         write(control_pipe[1], msg, strlen(msg));
                     } else {
+                        buffer[strlen(buffer)] = '\n';
                         handle_command(client_fd, buffer);
                     }
                 }
