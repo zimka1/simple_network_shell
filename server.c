@@ -40,7 +40,7 @@ void free_args(char ****args, int num_commands, int num_args_per_command) {
     *args = NULL;
 }
 
-void execute_command(int client_fd, char ***args, char **filenames, int row_number, const int *input_file_flags, const int *output_file_flags) {
+void execute_command(int client_fd, char ***args, char **filenames, int row_number, const int *input_file_flags, const int *output_file_flags, int not_all_flag) {
 
     char chunk_buf[CHUNK_SIZE];
     memset(chunk_buf, 0, sizeof(chunk_buf));
@@ -177,7 +177,8 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
         }
     }
 
-    write(client_fd, "\n[END]\n", 7);
+    if (!not_all_flag)
+        write(client_fd, "\n[END]\n", 7);
     close(result_pipe[0]);
 }
 
@@ -252,7 +253,7 @@ void handle_command(int client_fd, char *command) {
             }
             args[i][j] = NULL;
 
-            execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags);
+            execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags, 1);
 
             // Reset argument storage for next command
             for (int row = 0; row <= i; row++) {
@@ -314,7 +315,7 @@ void handle_command(int client_fd, char *command) {
         printf("\n");
     }
     // Execute the parsed pipeline
-    execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags);
+    execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags, 0);
 
     // Free allocated memory
     free_args(&args, num_commands, num_args_per_command);
