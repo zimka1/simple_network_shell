@@ -27,6 +27,7 @@ void run_script(const char *filename){
 
 int main(int argc, char *argv[]) {
     int is_server = 1, is_client = 0;
+    char *command_to_run = NULL;
     char *socket_path = SOCKET_PATH;
     char *host = "127.0.0.1";
     int tcp_port = -1;
@@ -59,9 +60,18 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (optind < argc) {
+    if (is_server && optind < argc) {
         const char *script_file = argv[optind];
         run_script(script_file);
+        return 0;
+    }
+
+    if (is_client && optind < argc) {
+        if (argv[optind][0] != '-') {
+            command_to_run = argv[optind];
+            command_to_run[strlen(command_to_run)] = '\n';
+            handle_command(-1, command_to_run);
+        }
         return 0;
     }
 
