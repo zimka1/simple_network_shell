@@ -111,8 +111,10 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
             }
 
             // Output redirection
-            if (output_file_flags[i]) {
+            if (output_file_flags[i] == 1) {
                 output_redirection(filenames[i]);
+            } else if (output_file_flags[i] == 2) {
+                output_redirection_append(filenames[i]);
             } else if (i < row_number) {
                 dup2(pipes[i][1], STDOUT_FILENO);
             } else {
@@ -234,6 +236,13 @@ void handle_command(int client_fd, char *command) {
             cur_char++;
             continue;
         }
+        if (*cur_char == '>' && *(cur_char + 1) == '>') {
+            cur_char += 2;
+            filenames[i] = read_filename(&cur_char);
+            output_file_flags[i] = 2;
+            continue;
+        }
+
         if (*cur_char == '>') {  // Handle output redirection
             cur_char++;
             filenames[i] = read_filename(&cur_char);
@@ -269,6 +278,7 @@ void handle_command(int client_fd, char *command) {
             input_file_flags = (int *)calloc(20, sizeof(int));
             free(output_file_flags);
             output_file_flags = (int *)calloc(20, sizeof(int));
+
             for (int row = 0; row <= i; row++) {
                 free(filenames[i]);
             }

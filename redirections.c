@@ -21,6 +21,17 @@ void output_redirection(char *filename) {
     close(fd);
 }
 
+void output_redirection_append(char *filename) {
+    int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd == -1) {
+        perror("Error opening file for append");
+        exit(1);
+    }
+    dup2(fd, STDOUT_FILENO);
+    close(fd);
+}
+
+
 void input_redirection(char *filename){
     // Open the file for reading
     // O_RDONLY - open for read-only access

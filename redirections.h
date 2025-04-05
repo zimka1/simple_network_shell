@@ -3,5 +3,6 @@
 
 void output_redirection(char *filename);
 void input_redirection(char *filename);
+void output_redirection_append(char *filename);
 
 #endif //MYSHELL_REDIRECTIONS_H
