@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
     int tcp_port = -1;
     int opt;
 
-    while ((opt = getopt(argc, argv, "scu:p:h:i:C:")) != -1) {
+    while ((opt = getopt(argc, argv, "scu:p:h:i:")) != -1) {
         switch (opt) {
             case 's':
                 is_server = 1;
@@ -52,14 +52,30 @@ int main(int argc, char *argv[]) {
             case 'i':
                 host = optarg;
                 break;
-            case 'C':
-                command_to_run = optarg;
-                break;
             case 'h':
-                printf("Usage: %s [-s | -c] [-u path/to/socket | -p tcp_port] [-i host_ip] [-C \"command\"]\n", argv[0]);
+                printf("Usage: %s [-s | -c] [-u path/to/socket | -p tcp_port] [-i host_ip] [-c command...]\n", argv[0]);
                 return 0;
             default:
                 return 1;
+        }
+    }
+
+    if (is_client && optind < argc && argv[optind][0] != '-') {
+        size_t total_len = 0;
+        for (int i = optind; i < argc; i++) {
+            total_len += strlen(argv[i]) + 1;
+        }
+
+        command_to_run = malloc(total_len);
+        if (!command_to_run) {
+            perror("malloc");
+            exit(1);
+        }
+
+        command_to_run[0] = '\0';
+        for (int i = optind; i < argc; i++) {
+            strcat(command_to_run, argv[i]);
+            if (i < argc - 1) strcat(command_to_run, " ");
         }
     }
 
@@ -75,8 +91,8 @@ int main(int argc, char *argv[]) {
         snprintf(command_buf, sizeof(command_buf), "%s%s", command_to_run,
                  (command_to_run[len - 1] == '\n') ? "" : "\n");
 
-        // Execute locally OR send to server
-        handle_command(-1, command_buf);  // -1 = print to stdout
+        handle_command(-1, command_buf);
+        free(command_to_run);
         return 0;
     }
 

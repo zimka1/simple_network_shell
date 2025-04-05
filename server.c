@@ -145,17 +145,17 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
     // PARENT PROCESS
     close(result_pipe[1]); // parent only reads
 
+    // Close all pipe ends in parent
+    for (int i = 0; i < row_number; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+
     while ((bytes_read = read(result_pipe[0], chunk_buf, sizeof(chunk_buf))) > 0) {
         if (client_fd > 0)
             write(client_fd, chunk_buf, bytes_read);
         else
             printf("%s", chunk_buf);
-    }
-
-    // Close all pipe ends in parent
-    for (int i = 0; i < row_number; i++) {
-        close(pipes[i][0]);
-        close(pipes[i][1]);
     }
 
     // Wait for all children
