@@ -42,7 +42,7 @@ void get_prompt(char *prompt, size_t size) {
 
 void main_connection_loop(int sock) {
     char prompt[256];          // Command prompt
-    char buffer[4096];         // Buffer for incoming data
+    char buffer[501];         // Buffer for incoming data
     char input_buf[1024];      // User input buffer
     int waiting_for_response = 0;  // Are we expecting a response?
 

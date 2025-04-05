@@ -10,7 +10,7 @@
 #include <arpa/inet.h>
 #include "redirections.h"
 
-#define CHUNK_SIZE 512
+#define CHUNK_SIZE 500
 
 
 char* read_filename(char **cur_char){
@@ -154,10 +154,9 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
     }
 
     while ((bytes_read = read(result_pipe[0], chunk_buf, sizeof(chunk_buf))) > 0) {
+        fwrite(chunk_buf, 1, bytes_read, stdout);
         if (client_fd > 0)
             write(client_fd, chunk_buf, bytes_read);
-        else
-            printf("%s", chunk_buf);
     }
 
     // Wait for all children
