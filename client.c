@@ -40,6 +40,7 @@ void get_prompt(char *prompt, size_t size) {
              time_buf, pw->pw_name, hostname);
 }
 
+
 void main_connection_loop(int sock) {
     char prompt[256];          // Command prompt
     char buffer[501];         // Buffer for incoming data
@@ -81,6 +82,42 @@ void main_connection_loop(int sock) {
                 printf("%s", prompt);
                 fflush(stdout);
                 continue;
+            }
+
+            if (strstr(input_buf, "<<")) {
+                char delimiter[64] = {0};
+                char *heredoc_pos = strstr(input_buf, "<<");
+                sscanf(heredoc_pos + 2, "%s", delimiter);
+
+                *heredoc_pos = '\0';
+                input_buf[strcspn(input_buf, "\n")] = '\0';
+
+                int old_flags = fcntl(STDIN_FILENO, F_GETFL);
+                fcntl(STDIN_FILENO, F_SETFL, old_flags & ~O_NONBLOCK);
+
+                char heredoc_data[4096] = "";
+                char line[1024];
+                while (1) {
+                    printf("heredoc> ");
+                    fflush(stdout);
+                    if (!fgets(line, sizeof(line), stdin)) break;
+
+                    char temp[1024];
+                    strcpy(temp, line);
+                    temp[strcspn(temp, "\n")] = '\0';
+                    if (strcmp(temp, delimiter) == 0)
+                        break;
+
+                    strncat(heredoc_data, temp, sizeof(heredoc_data) - strlen(heredoc_data) - 1);
+                    strncat(heredoc_data, "\\n", sizeof(heredoc_data) - strlen(heredoc_data) - 1);
+                }
+
+                char result[1024];
+                snprintf(result, sizeof(result), "printf %s | %s\n", heredoc_data, input_buf);
+                strncpy(input_buf, result, sizeof(result) - 1);
+                input_buf[sizeof(result) - 1] = '\0';
+
+                fcntl(STDIN_FILENO, F_SETFL, old_flags);
             }
 
             if (write(sock, input_buf, strlen(input_buf)) < 0) {
