@@ -1,3 +1,19 @@
+/* ==============================================================================================
+ * Client Module
+ * ==============================================================================================
+ *
+ * This module implements the client-side logic for the interactive shell.
+ * It supports connecting to either a UNIX socket or a TCP socket and communicating
+ * with the server through bidirectional streams. The user enters commands which
+ * are sent to the server; server responses are printed to stdout.
+ *
+ * The prompt includes time, username, and hostname. The client also supports heredoc (<<).
+ * Built-in control signals like [HALT], [QUIT], and [ABORT] are processed internally.
+ *
+ * ==============================================================================================
+ * ============================================================================================== */
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -8,6 +24,19 @@
 #include <sys/un.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+
+
+/* ==============================================================================================
+ * Generate Shell Prompt
+ * ==============================================================================================
+ *
+ * Constructs a colored prompt string of the form:
+ *     HH:MM username@hostname#
+ * Using system functions: getpwuid, gethostname, time, localtime, strftime.
+ * Colors are added via ANSI escape codes.
+ *
+ * ==============================================================================================
+ * ============================================================================================== */
 
 
 void get_prompt(char *prompt, size_t size) {
@@ -41,17 +70,32 @@ void get_prompt(char *prompt, size_t size) {
 }
 
 
-void main_connection_loop(int sock) {
-    char prompt[256];          // Command prompt
-    char buffer[501];         // Buffer for incoming data
-    char input_buf[1024];      // User input buffer
-    int waiting_for_response = 0;  // Are we expecting a response?
+/* ==============================================================================================
+ * Main Client Interaction Loop
+ * ==============================================================================================
+ *
+ * Handles bidirectional communication between client and server.
+ * - Reads user input and sends it to the server.
+ * - Receives and prints server response.
+ * - Supports heredoc (<< delimiter), which is rewritten into a printf-pipe.
+ * - Non-blocking I/O is used for responsiveness.
+ * - Recognizes control messages like [HALT], [QUIT], and [ABORT].
+ *
+ * ==============================================================================================
+ * ============================================================================================== */
 
-    // Set non-blocking I/O
+
+void main_connection_loop(int sock) {
+    char prompt[256];            // Prompt string (e.g., "12:30 user@host# ")
+    char buffer[501];            // Buffer for incoming server data
+    char input_buf[1024];        // Buffer for user input from stdin
+    int waiting_for_response = 0; // Flag: true if a command has been sent and waiting for output
+
+    // Set the socket and stdin to non-blocking mode
     fcntl(sock, F_SETFL, O_NONBLOCK);
     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-    // Initial prompt
+    // Initial display of the prompt
     get_prompt(prompt, sizeof(prompt));
     printf("%s", prompt);
     fflush(stdout);
@@ -59,42 +103,53 @@ void main_connection_loop(int sock) {
     while (1) {
         fd_set read_fds;
         FD_ZERO(&read_fds);
+
+        // Wait for input from user (stdin) only if not already waiting for server response
         if (!waiting_for_response)
             FD_SET(STDIN_FILENO, &read_fds);
+
+        // Always check for server messages
         FD_SET(sock, &read_fds);
 
         int max_fd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
 
+        // Wait for activity on stdin or socket (blocking select)
         int ready = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
         if (ready < 0) {
             perror("[CLIENT] select failed");
             break;
         }
 
-        // Handle user input
+        // USER INPUT HANDLING
         if (!waiting_for_response && FD_ISSET(STDIN_FILENO, &read_fds)) {
+            // Read line from stdin
             if (!fgets(input_buf, sizeof(input_buf), stdin)) {
                 printf("[CLIENT] Input closed.\n");
                 break;
             }
 
+            // Skip empty lines
             if (strlen(input_buf) <= 1) {
                 printf("%s", prompt);
                 fflush(stdout);
                 continue;
             }
 
+            // HEREDOC PROCESSING (<< delimiter)
             if (strstr(input_buf, "<<")) {
                 char delimiter[64] = {0};
                 char *heredoc_pos = strstr(input_buf, "<<");
-                sscanf(heredoc_pos + 2, "%s", delimiter);
+                sscanf(heredoc_pos + 2, "%s", delimiter); // extract delimiter
 
+                // Truncate heredoc marker from command
                 *heredoc_pos = '\0';
-                input_buf[strcspn(input_buf, "\n")] = '\0';
+                input_buf[strcspn(input_buf, "\n")] = '\0'; // remove newline
 
+                // Temporarily switch back to blocking mode for heredoc input
                 int old_flags = fcntl(STDIN_FILENO, F_GETFL);
                 fcntl(STDIN_FILENO, F_SETFL, old_flags & ~O_NONBLOCK);
 
+                // Read heredoc content until the delimiter is typed
                 char heredoc_data[4096] = "";
                 char line[1024];
                 while (1) {
@@ -102,24 +157,29 @@ void main_connection_loop(int sock) {
                     fflush(stdout);
                     if (!fgets(line, sizeof(line), stdin)) break;
 
+                    // Strip newline and compare with delimiter
                     char temp[1024];
                     strcpy(temp, line);
                     temp[strcspn(temp, "\n")] = '\0';
                     if (strcmp(temp, delimiter) == 0)
                         break;
 
+                    // Append the input line to heredoc_data, add escaped newline
                     strncat(heredoc_data, temp, sizeof(heredoc_data) - strlen(heredoc_data) - 1);
                     strncat(heredoc_data, "\\n", sizeof(heredoc_data) - strlen(heredoc_data) - 1);
                 }
 
+                // Rewrite input command as: printf "heredoc..." | original_command
                 char result[1024];
                 snprintf(result, sizeof(result), "printf %s | %s\n", heredoc_data, input_buf);
                 strncpy(input_buf, result, sizeof(result) - 1);
                 input_buf[sizeof(result) - 1] = '\0';
 
+                // Restore original non-blocking mode
                 fcntl(STDIN_FILENO, F_SETFL, old_flags);
             }
 
+            // Send the command to the server
             if (write(sock, input_buf, strlen(input_buf)) < 0) {
                 perror("[CLIENT] Failed to send command");
                 break;
@@ -128,13 +188,15 @@ void main_connection_loop(int sock) {
             waiting_for_response = 1;
         }
 
-        // Handle server response
+        // SERVER RESPONSE HANDLING
         if (FD_ISSET(sock, &read_fds)) {
             int bytes;
+
+            // Read all available data from the server
             while ((bytes = read(sock, buffer, sizeof(buffer) - 1)) > 0) {
                 buffer[bytes] = '\0';
 
-                // Control messages — must match exactly
+                // Handle special control messages from server
                 if (strncmp(buffer, "[HALT]", 6) == 0) {
                     printf("[CLIENT] Server halted. Exiting.\n");
                     exit(0);
@@ -148,23 +210,23 @@ void main_connection_loop(int sock) {
                     exit(0);
                 }
 
-                // Expected response — when waiting
+                // Handle output from the command, until [END] marker
                 if (waiting_for_response) {
-                    // Process [END]
                     char *end_marker = strstr(buffer, "[END]");
                     if (end_marker) {
-                        *end_marker = '\0';
+                        *end_marker = '\0'; // Cut off at [END] marker
                         printf("%s\n", buffer);
                         fflush(stdout);
                         waiting_for_response = 0;
 
+                        // Show new prompt
                         get_prompt(prompt, sizeof(prompt));
                         printf("%s", prompt);
                         fflush(stdout);
                         break;
                     }
 
-                    // Otherwise, part of ongoing response
+                    // If no [END], just print ongoing data
                     printf("%s", buffer);
                     fflush(stdout);
                 }
@@ -175,6 +237,16 @@ void main_connection_loop(int sock) {
 }
 
 
+
+/* ==============================================================================================
+ * UNIX Domain Socket Client
+ * ==============================================================================================
+ *
+ * Connects to a local UNIX socket at the given path and starts the interaction loop.
+ * If the connection fails, the client exits with an error.
+ *
+ * ==============================================================================================
+ * ============================================================================================== */
 
 
 void run_unix_client(char *socket_path) {
@@ -209,6 +281,18 @@ void run_unix_client(char *socket_path) {
     // Cleanup: close the socket
     close(sock);
 }
+
+
+/* ==============================================================================================
+ * TCP Socket Client
+ * ==============================================================================================
+ *
+ * Connects to a remote TCP socket on the given host and port, then starts the interaction loop.
+ * If the connection fails, an error is displayed and the client exits.
+ *
+ * ==============================================================================================
+ * ============================================================================================== */
+
 
 void run_tcp_client(const char *host, int port) {
     int sock;  // Socket file descriptor

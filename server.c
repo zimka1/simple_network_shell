@@ -1,3 +1,29 @@
+/* ==============================================================================================
+ * Server Module
+ * ==============================================================================================
+ *
+ * This module implements the core server-side logic of the interactive shell application.
+ * The server supports two types of socket interfaces:
+ *   - UNIX domain sockets (local IPC via file path)
+ *   - TCP/IP sockets (remote clients via host/port)
+ *
+ * The server listens for incoming connections and forks a child process for each client.
+ * Clients send shell-like commands which may include piping, redirection, or special
+ * internal commands such as `halt`, `quit`, `stat`, and `abort`. The parent process
+ * coordinates child sessions, processes control commands through a pipe, and maintains
+ * metadata about active connections.
+ *
+ * The module also includes:
+ *   - Parsing of shell commands, separating arguments, pipes, redirection, etc.
+ *   - Command execution with fork/exec and inter-process pipes
+ *   - I/O redirection using custom handlers (redirections.h)
+ *   - Linked list management for tracking connections
+ *   - Bidirectional communication with clients using sockets
+ *
+ * ==============================================================================================
+ */
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -11,6 +37,20 @@
 #include "redirections.h"
 
 #define CHUNK_SIZE 500
+
+
+/* ==============================================================================================
+ * Filename Parser for Redirection
+ * ==============================================================================================
+ * Parses filenames from the input command stream after encountering redirection operators:
+ *   - '>'   → output redirection
+ *   - '>>'  → output append redirection
+ *   - '<'   → input redirection
+ * Skips whitespaces and reads characters until a special shell delimiter is reached
+ * (such as pipe '|', semicolon ';', newline, or null terminator).
+ * Returns a newly allocated string containing the parsed filename.
+ * ==============================================================================================
+ */
 
 
 char* read_filename(char **cur_char){
@@ -29,6 +69,16 @@ char* read_filename(char **cur_char){
     return filename;
 }
 
+
+/* ==============================================================================================
+ * Free Command Argument Memory
+ * ==============================================================================================
+ * Frees dynamically allocated memory for command arguments
+ * used during parsing and execution.
+ * ==============================================================================================
+ */
+
+
 void free_args(char ****args, int num_commands, int num_args_per_command) {
     for (int row = 0; row < num_commands; row++) {
         for (int call = 0; call < num_args_per_command; call++) {
@@ -40,25 +90,65 @@ void free_args(char ****args, int num_commands, int num_args_per_command) {
     *args = NULL;
 }
 
-void execute_command(int client_fd, char ***args, char **filenames, int row_number, const int *input_file_flags, const int *output_file_flags, int not_all_flag) {
+
+/* ==============================================================================================
+ * Execute Parsed Commands (Pipeline Execution)
+ * ==============================================================================================
+ * Executes a sequence of parsed commands that form a pipeline.
+ * Each command is forked as a separate process. Pipes are created
+ * between them to connect stdout of one to stdin of the next.
+ *
+ * Handles redirection:
+ *   - Input redirection if '<' is used before a command
+ *   - Output redirection with '>' or '>>' at the end of a pipeline
+ *
+ * If the last process produces output, it is captured via a dedicated result pipe
+ * and sent back to the client over the socket, or printed locally if no socket is set.
+ * Built-in commands such as 'cd' and 'halt' are also handled here without forking.
+ * ==============================================================================================
+ */
+
+
+void execute_command(int client_fd, char ***args, char **filenames, int row_number,
+                     const int *input_file_flags, const int *output_file_flags, int not_all_flag) {
 
     char chunk_buf[CHUNK_SIZE];
     memset(chunk_buf, 0, sizeof(chunk_buf));
     int total = 0, bytes_read;
-
     char info_message[256] = "";
 
-
+    // Handle built-in 'halt' command: terminates the entire shell server
     if (strcmp(args[0][0], "halt") == 0) {
         if (client_fd > 0) {
             write(client_fd, "[HALT]", 6);
             write(client_fd, "[END]", 5);
         }
         printf("Server closed.\n");
-
-        killpg(0, SIGTERM);
+        killpg(0, SIGTERM); // Send termination to all processes in group
     }
 
+    // Handle built-in 'help' command: prints available internal commands
+    if (strcmp(args[0][0], "help") == 0) {
+        snprintf(info_message, sizeof(info_message),
+                 "[HELP] Available internal commands:\n"
+                 "  help           Show this message\n"
+                 "  cd <path>      Change working directory\n"
+                 "  halt           Shut down the entire server\n"
+                 "  quit           Disconnect current client\n"
+                 "  stat           Show active connections (server only)\n"
+                 "  abort <id>     Force-close a specific connection by ID\n");
+
+        // Send to client or print to stdout
+        if (client_fd > 0) {
+            write(client_fd, info_message, strlen(info_message));
+            write(client_fd, "[END]", 5);
+        } else {
+            printf("%s\n", info_message);
+        }
+        return;
+    }
+
+    // Handle built-in 'cd' command: changes working directory
     if (strcmp(args[0][0], "cd") == 0) {
         if (args[0][1] == NULL) {
             snprintf(info_message, sizeof(info_message), "[ERROR] cd: missing argument\n");
@@ -72,25 +162,27 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
         }
         total = strlen(chunk_buf);
         chunk_buf[total] = '\0';
-        // Write to client
+
+        // Send feedback to client or print to local terminal
         if (client_fd > 0) {
             write(client_fd, chunk_buf, total);
             write(client_fd, "[END]", 5);
-        }
-        else printf("%s\n", chunk_buf);
+        } else printf("%s\n", chunk_buf);
         return;
     }
 
-
+    // Declare pipes between commands in pipeline
     int pipes[row_number][2];
     pid_t pids[row_number + 1];
-    int result_pipe[2];
+    int result_pipe[2]; // Pipe used by the last command to send output to parent
 
+    // Create result pipe
     if (pipe(result_pipe) == -1) {
         perror("[ERROR] result_pipe error");
         exit(1);
     }
 
+    // Create all intermediate pipes for command chaining
     for (int i = 0; i < row_number; i++) {
         if (pipe(pipes[i]) == -1) {
             perror("[ERROR] Pipe error");
@@ -98,19 +190,20 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
         }
     }
 
+    // Fork each command in the pipeline
     for (int i = 0; i <= row_number; i++) {
         pids[i] = fork();
         if (pids[i] == 0) {
             // CHILD PROCESS
 
-            // Input redirection
+            // Handle input redirection or pipe from previous command
             if (input_file_flags[i]) {
                 input_redirection(filenames[i]);
             } else if (i > 0) {
                 dup2(pipes[i - 1][0], STDIN_FILENO);
             }
 
-            // Output redirection
+            // Handle output redirection or pipe to next command or result pipe
             if (output_file_flags[i] == 1) {
                 output_redirection(filenames[i]);
             } else if (output_file_flags[i] == 2) {
@@ -118,23 +211,25 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
             } else if (i < row_number) {
                 dup2(pipes[i][1], STDOUT_FILENO);
             } else {
-                dup2(result_pipe[1], STDOUT_FILENO); // last process writes to result_pipe
+                dup2(result_pipe[1], STDOUT_FILENO); // last command sends result here
             }
 
+            // Redirect STDERR to STDOUT for error capturing
             dup2(STDOUT_FILENO, STDERR_FILENO);
 
-            // Close all pipe ends after dup2
+            // Close all pipes not used by this child
             for (int j = 0; j < row_number; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
 
-            // Close unused ends of result_pipe
+            // Close unused ends of result pipe
             close(result_pipe[0]);
             if (i != row_number || output_file_flags[i]) {
                 close(result_pipe[1]);
             }
 
+            // Execute the command using execvp
             execvp(args[i][0], args[i]);
             perror("[ERROR] Execution error");
             exit(1);
@@ -145,25 +240,29 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
     }
 
     // PARENT PROCESS
-    close(result_pipe[1]); // parent only reads
 
-    // Close all pipe ends in parent
+    // Close write-end of result pipe (only reading)
+    close(result_pipe[1]);
+
+    // Close all intermediate pipes in parent
     for (int i = 0; i < row_number; i++) {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
 
+    // Read the output from result pipe and forward to client or print
     while ((bytes_read = read(result_pipe[0], chunk_buf, sizeof(chunk_buf))) > 0) {
         fwrite(chunk_buf, 1, bytes_read, stdout);
         if (client_fd > 0)
             write(client_fd, chunk_buf, bytes_read);
     }
 
-    // Wait for all children
+    // Wait for all forked child processes to finish
     for (int i = 0; i <= row_number; i++) {
         waitpid(pids[i], NULL, 0);
     }
 
+    // If no output was captured and output was redirected to a file, inform the client
     if (!bytes_read) {
         int filename_index = -1;
         for (int i = 0; i <= row_number; i++) {
@@ -178,10 +277,28 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
         }
     }
 
+    // Send [END] tag to indicate response finished (unless suppressed by not_all_flag)
     if (!not_all_flag)
         write(client_fd, "\n[END]\n", 7);
+
+    // Close result pipe's read-end
     close(result_pipe[0]);
 }
+
+
+
+/* ==============================================================================================
+ * Command Parsing and Handling
+ * ==============================================================================================
+ * Parses a raw command string received from the client or entered in script/server mode.
+ * Supports multiple commands separated by semicolons ';', and piped commands using '|'.
+ * Recognizes input/output redirection symbols ('<', '>', '>>') and associates them
+ * with the appropriate filenames.
+ *
+ * Constructs an array of commands (each with argument vectors) and dispatches the execution.
+ * ==============================================================================================
+ */
+
 
 void handle_command(int client_fd, char *command) {
     int num_commands = 10;
@@ -332,6 +449,25 @@ void handle_command(int client_fd, char *command) {
     free(output_file_flags);
 }
 
+
+/* ==============================================================================================
+ * Connection List Management
+ * ==============================================================================================
+ * This block defines and manipulates a linked list of currently active client connections.
+ * Each node contains:
+ *   - connection ID
+ *   - socket file descriptor
+ *   - PID of the child handling that connection
+ *
+ * Includes:
+ *   - print_connections() — prints active connections for 'stat' command
+ *   - find_fd()           — finds a file descriptor given a PID or ID
+ *   - add_connection()    — adds a new client connection node
+ *   - abort_connection()  — forcefully kills and cleans up a connection by PID or ID
+ * ==============================================================================================
+ */
+
+
 typedef struct connection_node {
     int id;
     int fd;
@@ -400,6 +536,23 @@ void abort_connection(connection_node_t **connection_list, int id, int pid) {
     printf("[WARN] No connection found with ID %d\n", id);
 }
 
+
+/* ==============================================================================================
+ * Main Server Loop (Select-Based Event Loop)
+ * ==============================================================================================
+ * Central event loop for the server. Uses select() to monitor:
+ *   - the main server socket (for new incoming connections)
+ *   - the control pipe (for inter-process messages)
+ *
+ * Upon new connection: forks a child process and creates an entry in the connection list.
+ * Child process handles communication with the client, including:
+ *   - forwarding control messages (stat, abort, quit)
+ *   - invoking the shell command handler
+ * Parent listens for messages and handles them accordingly, ensuring client status is updated.
+ * ==============================================================================================
+ */
+
+
 void main_server_loop(int server_fd) {
     // File descriptor for client connection
     int client_fd;
@@ -447,7 +600,6 @@ void main_server_loop(int server_fd) {
                 parent_buffer[bytes] = '\0';
                 if (strncmp(parent_buffer, "abort ", 5) == 0) {
                     // Handle 'abort' command
-                    char *command = strtok(parent_buffer, " ");
                     int arg_id = atoi(strtok(NULL, " "));
                     int sender_pid = atoi(strtok(NULL, " "));
 
@@ -581,6 +733,15 @@ void main_server_loop(int server_fd) {
 }
 
 
+/* ==============================================================================================
+ * UNIX Socket Server Entrypoint
+ * ==============================================================================================
+ * Initializes and starts a server using a UNIX domain socket bound to a filesystem path.
+ * Handles socket creation, binding, listening, and cleanup.
+ * Once ready, the server enters the main event loop to handle client connections.
+ * ==============================================================================================
+ */
+
 
 void run_unix_server(char *socket_path) {
     int server_fd;
@@ -621,6 +782,17 @@ void run_unix_server(char *socket_path) {
     close(server_fd);
     unlink(socket_path);
 }
+
+
+/* ==============================================================================================
+ * TCP Socket Server Entrypoint
+ * ==============================================================================================
+ * Initializes and starts a server using TCP/IP sockets.
+ * Binds the socket to a specified IP address and port, enabling remote client access.
+ * Configures options like SO_REUSEADDR and prepares the socket to listen.
+ * Enters the main server loop once setup is complete.
+ * ==============================================================================================
+ */
 
 
 void run_tcp_server(const char *host, int port) {
