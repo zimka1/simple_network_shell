@@ -136,7 +136,7 @@ void main_connection_loop(int sock) {
             }
 
             // HEREDOC PROCESSING (<< delimiter)
-            if (strstr(input_buf, "<<")) {
+            if (strstr(input_buf, "<<") && !strstr(input_buf, "<<<")) {
                 char delimiter[64] = {0};
                 char *heredoc_pos = strstr(input_buf, "<<");
                 sscanf(heredoc_pos + 2, "%s", delimiter); // extract delimiter

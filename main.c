@@ -39,16 +39,17 @@
  *
  *  Optional tasks – Completed extensions:
  *  --------------------------------------
- *  ✅ (1)  Non-interactive mode – the shell can process script files via `run_script()` (2 points)
- *  ✅ (2)  Cross-platform compatibility – runs on both Linux and FreeBSD (POSIX-compliant code) (2 points)
- *  ✅ (3)  Internal command `stat` – displays a list of active client connections (3 points)
- *  ✅ (4)  Internal command `abort <id>` – forcefully terminates a specific connection by ID (2 points)
- *  ✅ (7)  Support for `-i <ip>` flag – allows specifying IP address for TCP server/client (2 points)
- *  ✅ (11) Linked library usage – I/O redirection functions implemented in `redirections.c/.h` (2 points)
- *  ✅ (15) Internal commands as flags with `-c` – e.g., `-halt`, `-help` run once and exit (2 points)
- *  ✅ (23) Comprehensive English documentation and inline comments throughout the codebase (1 point)
+ *      (1)  Non-interactive mode – the shell can process script files via `run_script()` (2 points)
+ *      (2)  Cross-platform compatibility – runs on both Linux and FreeBSD (POSIX-compliant code) (2 points)
+ *      (3)  Internal command `stat` – displays a list of active client connections (3 points)
+ *      (4)  Internal command `abort <id>` – forcefully terminates a specific connection by ID (2 points)
+ *      (7)  Support for `-i <ip>` flag – allows specifying IP address for TCP server/client (2 points)
+ *      (11) Linked library usage – I/O redirection functions implemented in `redirections.c/.h` (2 points)
+ *      (15) Internal commands as flags with `-c` – e.g., `-halt`, `-help` run once and exit (2 points)
+ *      (21) Functional Makefile (2 points)
+ *      (23) Comprehensive English documentation and inline comments throughout the codebase (1 point)
  *
- *  Total points for optional tasks: 2 + 2 + 3 + 2 + 2 + 2 + 2 + 1 = 16 points
+ *  Total points for optional tasks: 2 + 2 + 3 + 2 + 2 + 2 + 2 + 2 + 1 = 18 points
  *
  *  Usage Examples:
  *      ./shell -s -u /tmp/myshell.sock
@@ -168,8 +169,6 @@ int main(int argc, char *argv[]) {
     char *host = "127.0.0.1";
     int tcp_port = -1;
     int opt;
-
-
     /* ==============================================================================================
      * Command-line Argument Parsing
      * ==============================================================================================
@@ -321,31 +320,33 @@ int main(int argc, char *argv[]) {
 To build and run this shell application in a Linux or UNIX-like environment:
 
 1) Compile all modules using gcc:
-       gcc -o shell main.c server.c client.c redirections.c
+        gcc -Wall -g -o shell main.c server.c client.c redirections.c
+    OR
+        make
 
 2) Run in server mode (default):
-       ./shell -s
+        ./shell -s
 
 3) Run in server mode using UNIX socket:
-       ./shell -s -u /tmp/myshell.sock
+        ./shell -s -u /tmp/myshell.sock
 
 4) Run in server mode using TCP port:
-       ./shell -s -p 1234 -i 127.0.0.1
+        ./shell -s -p 1234 -i 127.0.0.1
 
 5) Run in client mode (UNIX socket):
-       ./shell -c -u /tmp/myshell.sock
+        ./shell -c -u /tmp/myshell.sock
 
 6) Run in client mode (TCP socket):
-       ./shell -c -p 1234 -i 127.0.0.1
+        ./shell -c -p 1234 -i 127.0.0.1
 
 7) Display help:
-       ./shell -h
+        ./shell -h
 
 8) Execute one-time command (client mode):
-       ./shell -c "ls -la | grep txt"
+        ./shell -c "ls -la | grep txt"
 
 9) Run a command script (server mode only):
-       ./shell script.txt
+        ./shell script.txt
 
 ==============================================================================================
                                    P R O G R A M   A S S E S S M E N T
@@ -416,3 +417,4 @@ Internal control commands allow terminating sessions and querying connections.
 - Cross-platform behavior confirmed on Linux and FreeBSD systems
 
 ==============================================================================================
+*/

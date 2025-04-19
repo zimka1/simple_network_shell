@@ -279,7 +279,7 @@ void execute_command(int client_fd, char ***args, char **filenames, int row_numb
 
     // Send [END] tag to indicate response finished (unless suppressed by not_all_flag)
     if (!not_all_flag)
-        write(client_fd, "\n[END]\n", 7);
+        write(client_fd, "[END]", 7);
 
     // Close result pipe's read-end
     close(result_pipe[0]);
@@ -352,6 +352,12 @@ void handle_command(int client_fd, char *command) {
             cur_char++;
             continue;
         }
+
+        if (*cur_char == '<' && *(cur_char + 1) == '<' && *(cur_char + 2) == '<') {
+            cur_char += 3;
+            continue;
+        }
+
         if (*cur_char == '>' && *(cur_char + 1) == '>') {
             cur_char += 2;
             filenames[i] = read_filename(&cur_char);
