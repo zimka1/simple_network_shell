@@ -9,7 +9,7 @@
  *  Field of study:   informatika
  *
  *  Description:
- *      This is the main module of a simple interactive shell program that supports
+ *      This is the main module of a shell program that supports
  *      both client and server modes using UNIX and TCP sockets. The shell interprets
  *      user input or socket-received commands, executes them, and handles I/O redirection
  *      and special characters.
@@ -169,6 +169,8 @@ int main(int argc, char *argv[]) {
     char *host = "127.0.0.1";
     int tcp_port = -1;
     int opt;
+
+
     /* ==============================================================================================
      * Command-line Argument Parsing
      * ==============================================================================================
@@ -225,6 +227,11 @@ int main(int argc, char *argv[]) {
 
 
     if (is_client && optind < argc && argv[optind][0] != '-') {
+        if (strcmp(argv[optind], "-help") == 0) {
+            print_help();
+            return 0;
+        }
+
         size_t total_len = 0;
         for (int i = optind; i < argc; i++) {
             total_len += strlen(argv[i]) + 1;
@@ -314,8 +321,8 @@ int main(int argc, char *argv[]) {
 
 
 /* ==============================================================================================
-                                I N S T R U C T I O N S   T O   R U N   T H E   P R O G R A M
-==============================================================================================
+                    I N S T R U C T I O N S   T O   R U N   T H E   P R O G R A M
+=================================================================================================
 
 To build and run this shell application in a Linux or UNIX-like environment:
 
@@ -348,9 +355,9 @@ To build and run this shell application in a Linux or UNIX-like environment:
 9) Run a command script (server mode only):
         ./shell script.txt
 
-==============================================================================================
+=================================================================================================
                                    P R O G R A M   A S S E S S M E N T
-==============================================================================================
+=================================================================================================
 
 This program implements a simple interactive shell supporting local and remote (client-server)
 execution. It provides both TCP and UNIX domain socket communication, and can execute piped
@@ -359,9 +366,9 @@ commands with input/output redirection.
 The shell supports interactive mode, script-based execution, and one-shot client commands.
 Internal control commands allow terminating sessions and querying connections.
 
-==============================================================================================
+=================================================================================================
                                        P R O G R A M   F E A T U R E S
-==============================================================================================
+=================================================================================================
 
 - Supports UNIX and TCP sockets for local or network communication
 - Interactive command execution with support for redirection and pipes
@@ -373,9 +380,9 @@ Internal control commands allow terminating sessions and querying connections.
 - External library usage for modular I/O redirection handling
 - Full English documentation and clean modular structure
 
-==============================================================================================
+=================================================================================================
                                 I N P U T   H A N D L I N G   B E H A V I O R
-==============================================================================================
+=================================================================================================
 
 - Accepts command-line switches such as -s, -c, -u, -p, -i, -h
 - In client mode, accepts commands from user interactively or via -c argument
@@ -383,9 +390,9 @@ Internal control commands allow terminating sessions and querying connections.
 - If a command fails or is malformed, appropriate error messages are displayed
 - Redirection using `<`, `>`, `>>` and piping using `|` are fully supported
 
-==============================================================================================
+=================================================================================================
                     A L G O R I T H M S   A N D   P R O G R A M M I N G   T E C H N I Q U E S
-==============================================================================================
+=================================================================================================
 
 - Uses `fork()` + `execvp()` for command execution
 - Commands are parsed and split based on separators (`;`, `|`, `<`, `>`)
@@ -395,9 +402,9 @@ Internal control commands allow terminating sessions and querying connections.
 - I/O redirection is implemented via `dup2()` and file descriptor manipulation
 - Robust memory management ensures dynamic command handling
 
-==============================================================================================
+=================================================================================================
                                P O T E N T I A L   E N H A N C E M E N T S
-==============================================================================================
+=================================================================================================
 
 - Add configurable prompt format and prompt command
 - Implement support for wildcards/globbing (`*`)
@@ -405,9 +412,9 @@ Internal control commands allow terminating sessions and querying connections.
 - Add support for daemon mode and advanced signal handling
 - Load settings from config file and environment variables
 
-==============================================================================================
+=================================================================================================
                                    T E S T I N G   R E S U L T S
-==============================================================================================
+=================================================================================================
 
 - Tested on Linux with both UNIX and TCP sockets
 - Successfully handles multiple clients simultaneously
@@ -416,5 +423,6 @@ Internal control commands allow terminating sessions and querying connections.
 - Tested internal commands: `halt`, `quit`, `stat`, `abort`, `help`
 - Cross-platform behavior confirmed on Linux and FreeBSD systems
 
-==============================================================================================
+=================================================================================================
+=================================================================================================
 */

@@ -112,7 +112,7 @@ void free_args(char ****args, int num_commands, int num_args_per_command) {
 void execute_command(int client_fd, char ***args, char **filenames, int row_number,
                      const int *input_file_flags, const int *output_file_flags, int not_all_flag) {
 
-    char chunk_buf[CHUNK_SIZE];
+    char chunk_buf[4096];
     memset(chunk_buf, 0, sizeof(chunk_buf));
     int total = 0, bytes_read;
     char info_message[256] = "";
@@ -339,8 +339,6 @@ void handle_command(int client_fd, char *command) {
     char *cur_char = command;
     char **filenames = (char **)calloc(max_arg_length, sizeof(char *));
 
-    printf("%s\n", command);
-
     // Loop through the command string to parse arguments
     while (*cur_char != '\n') {
         if (*cur_char == ' ') {
@@ -437,15 +435,14 @@ void handle_command(int client_fd, char *command) {
         return;
     }
 
-    printf("execute \n");
+//    for (int row = 0; row <= i; row++) {
+//        for (int coll = 0; coll < num_args_per_command; coll++) {
+//            printf("%s ", args[row][coll]);
+//            if (args[row][coll] == NULL) break;
+//        }
+//        printf("\n");
+//    }
 
-    for (int row = 0; row <= i; row++) {
-        for (int coll = 0; coll < num_args_per_command; coll++) {
-            printf("%s ", args[row][coll]);
-            if (args[row][coll] == NULL) break;
-        }
-        printf("\n");
-    }
     // Execute the parsed pipeline
     execute_command(client_fd, args, filenames, i, input_file_flags, output_file_flags, 0);
 
@@ -698,7 +695,7 @@ void main_server_loop(int server_fd) {
                 close(server_fd);
                 close(control_pipe[0]); // Close unused pipe
 
-                char buffer[5096];
+                char buffer[4096];
 
                 while (1) {
                     int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);

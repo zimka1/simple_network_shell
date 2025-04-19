@@ -87,7 +87,7 @@ void get_prompt(char *prompt, size_t size) {
 
 void main_connection_loop(int sock) {
     char prompt[256];            // Prompt string (e.g., "12:30 user@host# ")
-    char buffer[501];            // Buffer for incoming server data
+    char buffer[4096];            // Buffer for incoming server data
     char input_buf[1024];        // Buffer for user input from stdin
     int waiting_for_response = 0; // Flag: true if a command has been sent and waiting for output
 
