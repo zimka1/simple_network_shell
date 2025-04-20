@@ -227,11 +227,6 @@ int main(int argc, char *argv[]) {
 
 
     if (is_client && optind < argc && argv[optind][0] != '-') {
-        if (strcmp(argv[optind], "-help") == 0) {
-            print_help();
-            return 0;
-        }
-
         size_t total_len = 0;
         for (int i = optind; i < argc; i++) {
             total_len += strlen(argv[i]) + 1;
