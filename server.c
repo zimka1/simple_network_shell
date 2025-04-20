@@ -597,12 +597,12 @@ void main_server_loop(int server_fd) {
         // Handle commands from child process
         if (FD_ISSET(control_pipe[0], &read_fds)) {
             char parent_buffer[256];
-
             ssize_t bytes = read(control_pipe[0], parent_buffer, sizeof(parent_buffer) - 1);
             if (bytes > 0) {
                 parent_buffer[bytes] = '\0';
                 if (strncmp(parent_buffer, "abort ", 5) == 0) {
                     // Handle 'abort' command
+                    strtok(parent_buffer, " ");
                     int arg_id = atoi(strtok(NULL, " "));
                     int sender_pid = atoi(strtok(NULL, " "));
 
@@ -632,7 +632,6 @@ void main_server_loop(int server_fd) {
                             write(arg_fd, "[END]", 5);
                         }
                     }
-
                     // Abort connection for chosen id
                     abort_connection(&connection_list, arg_id, -1);
 
